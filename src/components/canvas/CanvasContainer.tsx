@@ -1,60 +1,75 @@
 import { useEffect, useRef } from 'react';
+import { useCanvasEngine, useKeyboardShortcuts } from '@/hooks';
 import { CanvasEngine } from '@/core';
-import { RenderPipeline } from '@/core';
-import { useCanvasStore, useLayerStore } from '@/stores';
+import type { Vector2 } from '@/types';
 
-export function CanvasContainer() {
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const engineRef = useRef<CanvasEngine | null>(null);
-  const pipelineRef = useRef<RenderPipeline | null>(null);
+interface CanvasContainerProps {
+  onEngineReady?: (engine: CanvasEngine) => void;
+  onCursorMove?: (position: Vector2) => void;
+}
 
-  const setViewport = useCanvasStore(state => state.setViewport);
-  const setGrid = useCanvasStore(state => state.setGrid);
-  const layerState = useLayerStore();
+export function CanvasContainer({ onEngineReady, onCursorMove }: CanvasContainerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
 
+  const { engine } = useCanvasEngine({
+    containerRef,
+    onReady: (eng) => {
+      onEngineReady?.(eng);
+    },
+  });
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    onZoomIn: () => {
+      const viewport = engine?.getViewport();
+      if (viewport) {
+        engine?.setZoom(viewport.zoom * 1.25);
+      }
+    },
+    onZoomOut: () => {
+      const viewport = engine?.getViewport();
+      if (viewport) {
+        engine?.setZoom(viewport.zoom * 0.8);
+      }
+    },
+    onFitToCanvas: () => {
+      engine?.fitToCanvas();
+    },
+    onUndo: () => {
+      console.log('Undo'); // Will implement in Phase 10
+    },
+    onRedo: () => {
+      console.log('Redo'); // Will implement in Phase 10
+    },
+  });
+
+  // Track cursor position for status bar
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!containerRef.current) return;
 
-    const engine = new CanvasEngine();
-    engineRef.current = engine;
-
-    engine.init(canvasRef.current, {
-      backgroundColor: '#1a1a2e',
-      width: 4096,
-      height: 4096,
-    }, {
-      onViewportChange: (viewport) => {
-        setViewport(viewport);
-      },
-      onGridChange: (config) => {
-        setGrid(config);
-      },
-    }).then(async () => {
-      // Initialize render pipeline
-      const pipeline = new RenderPipeline(
-        engine['app'],
-        engine.getWorldContainer()
-      );
-
-      await pipeline.init(4096, 4096);
-      pipelineRef.current = pipeline;
-
-      // Sync initial layer state
-      pipeline.getLayerManager().syncWithState(layerState);
-    });
-
-    return () => {
-      pipelineRef.current?.destroy();
-      engineRef.current?.destroy();
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!engine) return;
+      const rect = containerRef.current!.getBoundingClientRect();
+      const screenPos = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+      const worldPos = engine.screenToWorld(screenPos);
+      onCursorMove?.(worldPos);
     };
-  }, []);
 
-  // Sync layer state changes
-  useEffect(() => {
-    if (pipelineRef.current) {
-      pipelineRef.current.getLayerManager().syncWithState(layerState);
-    }
-  }, [layerState.layers, layerState.rootOrder]);
+    containerRef.current.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      containerRef.current?.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, [engine, onCursorMove]);
 
-  return <div ref={canvasRef} className="w-full h-full canvas-container" />;
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full bg-ink-950 outline-none"
+      tabIndex={0}
+      style={{ touchAction: 'none' }}
+    />
+  );
 }

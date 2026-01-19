@@ -107,6 +107,7 @@ export class CanvasEngine {
 
     this.setupInputHandlers();
     this.setupResizeHandler();
+    this.setupWebGLContextHandlers();
 
     // Start render loop
     this.app.ticker.add(this.update);
@@ -180,11 +181,31 @@ export class CanvasEngine {
    */
   private setupResizeHandler(): void {
     const resizeObserver = new ResizeObserver(() => {
-      this.camera.setScreenSize(this.app.screen.width, this.app.screen.height);
-      this.emitViewportChange();
+      if (this.camera) {
+        this.camera.setScreenSize(this.app.screen.width, this.app.screen.height);
+        this.emitViewportChange();
+      }
     });
 
     resizeObserver.observe(this.app.canvas);
+  }
+
+  /**
+   * Setup WebGL context lost/restored handlers
+   */
+  private setupWebGLContextHandlers(): void {
+    const canvas = this.app.canvas as HTMLCanvasElement;
+
+    canvas.addEventListener('webglcontextlost', (event) => {
+      console.warn('[CanvasEngine] WebGL context lost');
+      event.preventDefault(); // Allow context to be restored
+    });
+
+    canvas.addEventListener('webglcontextrestored', () => {
+      console.log('[CanvasEngine] WebGL context restored');
+      // Redraw background
+      this.drawBackground();
+    });
   }
 
   /**
@@ -217,6 +238,13 @@ export class CanvasEngine {
   }
 
   // Public API
+
+  /**
+   * Get the Pixi Application instance
+   */
+  getApp(): Application {
+    return this.app;
+  }
 
   /**
    * Get the world container for adding content
@@ -291,6 +319,9 @@ export class CanvasEngine {
    * Convert screen to world coordinates
    */
   screenToWorld(screen: Vector2): Vector2 {
+    if (!this.camera) {
+      return screen; // Return screen coords if camera not initialized
+    }
     return this.camera.screenToWorld(screen);
   }
 

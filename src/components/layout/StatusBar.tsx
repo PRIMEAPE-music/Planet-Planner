@@ -1,14 +1,30 @@
-import { useCanvasStore } from '@/stores';
+import { useCanvasStore, useToolStore } from '@/stores';
+import type { Vector2 } from '@/types';
 
-export function StatusBar() {
+interface StatusBarProps {
+  cursorPosition?: Vector2;
+}
+
+export function StatusBar({ cursorPosition }: StatusBarProps) {
   const viewport = useCanvasStore(state => state.viewport);
+  const activeTool = useToolStore(state => state.activeTool);
+  const grid = useCanvasStore(state => state.grid);
 
   return (
-    <div className="h-7 bg-ink-950 border-t border-ink-700 flex items-center px-4 text-xs text-parchment-400">
+    <div className="h-7 bg-ink-950 border-t border-ink-700 flex items-center justify-between px-4 text-xs text-parchment-400">
+      <div className="flex gap-4">
+        <span className="capitalize">{activeTool}</span>
+        {cursorPosition && (
+          <>
+            <span>X: {Math.round(cursorPosition.x)}</span>
+            <span>Y: {Math.round(cursorPosition.y)}</span>
+          </>
+        )}
+      </div>
       <div className="flex gap-4">
         <span>Zoom: {Math.round(viewport.zoom * 100)}%</span>
-        <span>X: {Math.round(viewport.center.x)}</span>
-        <span>Y: {Math.round(viewport.center.y)}</span>
+        {grid.visible && <span>Grid: {grid.cellSize}px</span>}
+        {grid.snapToGrid && <span>Snap</span>}
       </div>
     </div>
   );
