@@ -1,6 +1,7 @@
 import { Container } from 'pixi.js';
 import { LayerContainer } from './Layer';
 import type { Layer as LayerData, LayerState, Bounds } from '@/types';
+import { debug } from '@/utils';
 
 export interface LayerManagerEvents {
   'layer:created': LayerContainer;
@@ -88,13 +89,24 @@ export class LayerManager {
    */
   createLayer(data: LayerData): LayerContainer {
     if (this.layers.has(data.id)) {
-      console.warn(`Layer ${data.id} already exists`);
+      debug.warn(`Layer ${data.id} already exists`);
       return this.layers.get(data.id)!;
     }
 
     const layer = new LayerContainer(data);
     this.layers.set(data.id, layer);
     this.rootContainer.addChild(layer.container);
+
+    debug.log('[LayerManager] Created layer:', {
+      id: data.id,
+      name: data.name,
+      visible: layer.container.visible,
+      alpha: layer.container.alpha,
+      position: { x: layer.container.x, y: layer.container.y },
+      childrenCount: layer.container.children.length,
+      contentChildrenCount: layer.contentContainer.children.length,
+      parent: layer.container.parent?.constructor.name,
+    });
 
     this.emit('layer:created', layer);
     return layer;
@@ -106,7 +118,7 @@ export class LayerManager {
   updateLayer(id: string, data: Partial<LayerData>): void {
     const layer = this.layers.get(id);
     if (!layer) {
-      console.warn(`Layer ${id} not found`);
+      debug.warn(`Layer ${id} not found`);
       return;
     }
 
@@ -147,16 +159,34 @@ export class LayerManager {
    * Set layer order (affects z-index)
    */
   setLayerOrder(order: string[]): void {
+    // Check if order actually changed to avoid unnecessary reordering
+    const orderChanged =
+      this.layerOrder.length !== order.length ||
+      this.layerOrder.some((id, i) => id !== order[i]);
+
+    if (!orderChanged) {
+      return; // Skip if order hasn't changed
+    }
+
     this.layerOrder = [...order];
 
-    // Reorder containers in Pixi.js
-    // Lower index = rendered first = behind
+    // CRITICAL: setChildIndex() in Pixi v8 breaks rendering state
+    // Instead, remove all layer containers and re-add them in correct order
+    // This preserves the rendering state that was set up after fitToCanvas()
+    debug.log('[LayerManager] Reordering layers (avoid setChildIndex)');
+
+    // Remove all layer containers from root
+    for (const layer of this.layers.values()) {
+      this.rootContainer.removeChild(layer.container);
+    }
+
+    // Re-add in correct order
     for (let i = 0; i < order.length; i++) {
       const layerId = order[i];
       if (!layerId) continue;
       const layer = this.layers.get(layerId);
       if (layer) {
-        this.rootContainer.setChildIndex(layer.container, i);
+        this.rootContainer.addChild(layer.container);
       }
     }
 

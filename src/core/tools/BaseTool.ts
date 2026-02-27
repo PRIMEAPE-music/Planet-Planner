@@ -57,9 +57,13 @@ export abstract class BaseTool implements ITool {
   onDeactivate(_ctx: ToolContext): void {
     this.isActive = false;
     this.clearPreview();
-    // Remove preview container from world
-    if (this.previewContainer.parent) {
-      this.previewContainer.parent.removeChild(this.previewContainer);
+    // Remove preview container from world (guard against destroyed parent)
+    try {
+      if (this.previewContainer.parent) {
+        this.previewContainer.parent.removeChild(this.previewContainer);
+      }
+    } catch {
+      // Parent may have already been destroyed
     }
   }
 

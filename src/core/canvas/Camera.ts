@@ -156,6 +156,15 @@ export class Camera {
   }
 
   /**
+   * Force immediate camera update (skip smooth transitions)
+   */
+  forceUpdate(): void {
+    this.viewport.zoom = this.targetZoom;
+    this.viewport.center = { ...this.targetCenter };
+    this.applyTransform();
+  }
+
+  /**
    * Update camera (call each frame for smooth movement)
    */
   update(deltaTime: number): boolean {
@@ -167,8 +176,8 @@ export class Camera {
       this.viewport.zoom = this.viewport.zoom + (this.targetZoom - this.viewport.zoom) * damping;
       changed = true;
     } else if (this.viewport.zoom !== this.targetZoom) {
+      // Snap to exact target when within epsilon
       this.viewport.zoom = this.targetZoom;
-      changed = true;
     }
 
     // Smooth pan

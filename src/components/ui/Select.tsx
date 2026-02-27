@@ -2,7 +2,6 @@ import * as React from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/utils';
 
-// Native SelectItem - just a wrapper for option data
 interface SelectItemProps {
   value: string;
   children: React.ReactNode;
@@ -17,7 +16,6 @@ function SelectItem({ value, children, disabled }: SelectItemProps) {
   );
 }
 
-// Simple native select wrapper
 interface SimpleSelectProps {
   value: string;
   onValueChange: (value: string) => void;
@@ -65,20 +63,4 @@ function SimpleSelect({
   );
 }
 
-// Legacy exports for compatibility (not actually used with native select)
-const Select = ({ children }: { children: React.ReactNode }) => <>{children}</>;
-const SelectGroup = ({ children }: { children: React.ReactNode }) => <>{children}</>;
-const SelectValue = () => null;
-const SelectTrigger = ({ children }: { children: React.ReactNode }) => <>{children}</>;
-const SelectContent = ({ children }: { children: React.ReactNode }) => <>{children}</>;
-
-export {
-  Select,
-  SelectGroup,
-  SelectValue,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SimpleSelect as default,
-};
-export { SimpleSelect };
+export { SelectItem, SimpleSelect };

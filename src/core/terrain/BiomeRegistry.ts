@@ -562,6 +562,10 @@ const DEFAULT_BIOMES: BiomeDefinition[] = [
  */
 export class BiomeRegistry {
   private biomes: Map<BiomeType, BiomeDefinition> = new Map();
+  /** Cache for getBlendedColor results: "biomeId|colorKey|blend" → hex string */
+  private blendCache: Map<string, string> = new Map();
+  /** The styleBlend value the cache was built for (cleared on change) */
+  private cachedBlend: number = -1;
 
   constructor() {
     this.registerDefaults();
@@ -657,29 +661,49 @@ export class BiomeRegistry {
   }
 
   /**
-   * Get interpolated color between realistic and parchment
+   * Clear the blended color cache (call when biome definitions change)
+   */
+  clearCache(): void {
+    this.blendCache.clear();
+    this.cachedBlend = -1;
+  }
+
+  /**
+   * Get interpolated color between realistic and parchment (memoized)
    */
   getBlendedColor(
     biome: BiomeDefinition,
     colorKey: keyof BiomeColorPalette,
     styleBlend: number
   ): string {
-    const realistic = biome.realisticColors[colorKey];
-    const parchment = biome.parchmentColors[colorKey];
-    return this.interpolateColor(realistic, parchment, styleBlend);
+    // Invalidate cache if styleBlend changed (new render pass)
+    if (styleBlend !== this.cachedBlend) {
+      this.blendCache.clear();
+      this.cachedBlend = styleBlend;
+    }
+
+    const key = `${biome.id}|${colorKey}`;
+    let result = this.blendCache.get(key);
+    if (result === undefined) {
+      const realistic = biome.realisticColors[colorKey];
+      const parchment = biome.parchmentColors[colorKey];
+      result = this.interpolateColor(realistic, parchment, styleBlend);
+      this.blendCache.set(key, result);
+    }
+    return result;
   }
 
   /**
    * Interpolate between two hex colors
    */
   private interpolateColor(color1: string, color2: string, t: number): string {
-    const r1 = parseInt(color1.slice(1, 3), 16);
-    const g1 = parseInt(color1.slice(3, 5), 16);
-    const b1 = parseInt(color1.slice(5, 7), 16);
+    const r1 = parseInt(color1.slice(1, 3), 16) || 0;
+    const g1 = parseInt(color1.slice(3, 5), 16) || 0;
+    const b1 = parseInt(color1.slice(5, 7), 16) || 0;
 
-    const r2 = parseInt(color2.slice(1, 3), 16);
-    const g2 = parseInt(color2.slice(3, 5), 16);
-    const b2 = parseInt(color2.slice(5, 7), 16);
+    const r2 = parseInt(color2.slice(1, 3), 16) || 0;
+    const g2 = parseInt(color2.slice(3, 5), 16) || 0;
+    const b2 = parseInt(color2.slice(5, 7), 16) || 0;
 
     const r = Math.round(r1 + (r2 - r1) * t);
     const g = Math.round(g1 + (g2 - g1) * t);

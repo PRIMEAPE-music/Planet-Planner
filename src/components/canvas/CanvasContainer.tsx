@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useCanvasEngine, useKeyboardShortcuts } from '@/hooks';
-import { CanvasEngine } from '@/core';
+import { CanvasEngine, LayerManager } from '@/core';
+import { useHistoryStore } from '@/stores';
 import type { Vector2 } from '@/types';
 
 interface CanvasContainerProps {
-  onEngineReady?: (engine: CanvasEngine) => void;
+  onEngineReady?: (engine: CanvasEngine, layerManager: LayerManager) => void;
   onCursorMove?: (position: Vector2) => void;
 }
 
@@ -13,8 +14,8 @@ export function CanvasContainer({ onEngineReady, onCursorMove }: CanvasContainer
 
   const { engine } = useCanvasEngine({
     containerRef,
-    onReady: (eng) => {
-      onEngineReady?.(eng);
+    onReady: (eng, lm) => {
+      onEngineReady?.(eng, lm);
     },
   });
 
@@ -35,12 +36,8 @@ export function CanvasContainer({ onEngineReady, onCursorMove }: CanvasContainer
     onFitToCanvas: () => {
       engine?.fitToCanvas();
     },
-    onUndo: () => {
-      console.log('Undo'); // Will implement in Phase 10
-    },
-    onRedo: () => {
-      console.log('Redo'); // Will implement in Phase 10
-    },
+    onUndo: () => useHistoryStore.getState().undo(),
+    onRedo: () => useHistoryStore.getState().redo(),
   });
 
   // Track cursor position for status bar

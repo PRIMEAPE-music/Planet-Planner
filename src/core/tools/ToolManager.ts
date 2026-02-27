@@ -3,6 +3,7 @@ import type { ITool, ToolContext, ToolOperationResult } from './types';
 import type { CanvasEngine } from '../canvas/CanvasEngine';
 import type { LayerManager } from '../layers/LayerManager';
 import type { Vector2, InputState } from '@/types';
+import { debug } from '@/utils';
 
 // Import tools
 import { SelectTool } from './SelectTool';
@@ -21,6 +22,8 @@ export interface ToolManagerConfig {
   onToolChange?: (toolId: string) => void;
   /** Callback when operation completes (for undo/redo) */
   onOperationComplete?: (result: ToolOperationResult) => void;
+  /** Callback when eyedropper picks a color */
+  onColorPicked?: (color: string) => void;
   /** Get tool options from store */
   getToolOptions?: (toolId: string) => unknown;
   /** Get active layer ID from store */
@@ -79,7 +82,12 @@ export class ToolManager {
     this.registerTool(new FillTool());
     this.registerTool(new StampTool());
     this.registerTool(new TextTool());
-    this.registerTool(new EyedropperTool());
+
+    const eyedropper = new EyedropperTool();
+    eyedropper.setOnColorPicked((color: string) => {
+      this.config.onColorPicked?.(color);
+    });
+    this.registerTool(eyedropper);
   }
 
   /**
@@ -109,7 +117,7 @@ export class ToolManager {
   setActiveTool(toolId: string): void {
     const tool = this.tools.get(toolId);
     if (!tool) {
-      console.warn(`Tool '${toolId}' not found`);
+      debug.warn(`Tool '${toolId}' not found`);
       return;
     }
 
@@ -142,7 +150,7 @@ export class ToolManager {
   /**
    * Create tool context from current state
    */
-  private createContext(): ToolContext {
+  private createContext(deltaTime?: number): ToolContext {
     const activeLayerId = this.config.getActiveLayerId?.() ?? null;
     const activeLayer = activeLayerId
       ? this.layerManager.getLayer(activeLayerId) ?? null
@@ -166,7 +174,7 @@ export class ToolManager {
       strokePath: [...this.strokePath],
       strokeTime: this.strokeStartTime > 0 ? Date.now() - this.strokeStartTime : 0,
       isStroking: this.isStroking,
-      deltaTime: 1 / 60, // Will be updated by animation frame
+      deltaTime: deltaTime ?? 1 / 60,
     };
   }
 
@@ -174,6 +182,7 @@ export class ToolManager {
    * Handle pointer down event
    */
   handlePointerDown(screenPos: Vector2, worldPos: Vector2, input: InputState): void {
+    debug.log('[ToolManager] handlePointerDown', { screenPos, worldPos, activeTool: this.activeTool?.id });
     this.currentInput = input;
     this.currentScreenPosition = screenPos;
     this.currentWorldPosition = worldPos;
@@ -185,7 +194,9 @@ export class ToolManager {
     this.strokeStartTime = Date.now();
 
     if (this.activeTool) {
-      this.activeTool.onPointerDown(this.createContext());
+      const ctx = this.createContext();
+      debug.log('[ToolManager] Calling tool onPointerDown, activeLayer:', ctx.activeLayer?.id);
+      this.activeTool.onPointerDown(ctx);
     }
   }
 
@@ -253,9 +264,7 @@ export class ToolManager {
    */
   update(deltaTime: number): void {
     if (this.activeTool && this.isStroking) {
-      const ctx = this.createContext();
-      (ctx as { deltaTime: number }).deltaTime = deltaTime;
-      this.activeTool.onUpdate(ctx);
+      this.activeTool.onUpdate(this.createContext(deltaTime));
     }
   }
 

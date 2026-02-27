@@ -46,9 +46,19 @@ export const useLayerStore = create<LayerStoreState>()(
       const now = Date.now();
       const existingLayers = Object.keys(get().layers).length;
 
+      // Calculate next layer number based on existing layer names
+      const getNextLayerNumber = (): number => {
+        const layers = Object.values(get().layers);
+        const numbers = layers.map((l) => {
+          const match = l.name.match(/^Layer (\d+)$/);
+          return match && match[1] ? parseInt(match[1], 10) : 0;
+        });
+        return Math.max(0, ...numbers) + 1;
+      };
+
       const layer: Layer = {
         id,
-        name: options.name ?? `Layer ${existingLayers + 1}`,
+        name: options.name ?? `Layer ${getNextLayerNumber()}`,
         type: options.type,
         visible: options.visible ?? true,
         locked: false,

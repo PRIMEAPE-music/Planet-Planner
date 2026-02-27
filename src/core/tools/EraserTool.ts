@@ -61,9 +61,18 @@ export class EraserTool extends BaseTool {
 
     this.smoother.reset();
 
-    // Create eraser graphics with destination-out blend
+    // Create eraser graphics - draws with canvas background color to simulate erasing
+    // Set high z-index so it always appears on top of other content
     this.strokeGraphics = new Graphics();
-    this.strokeGraphics.blendMode = 'erase';
+    this.strokeGraphics.blendMode = 'normal';
+    this.strokeGraphics.zIndex = 1000; // High z-index to render on top
+
+    // Enable sorting for the layer container to respect z-index
+    const layerContainer = ctx.activeLayer.contentContainer;
+    if (layerContainer) {
+      layerContainer.sortableChildren = true;
+    }
+
     ctx.activeLayer.addContent(this.strokeGraphics);
 
     const pressure = this.options.pressureSensitivity ? ctx.input.pressure || 1 : 1;
@@ -121,9 +130,11 @@ export class EraserTool extends BaseTool {
       ? this.options.size * pressure
       : this.options.size;
 
-    // Draw white circle (which will erase due to blend mode)
-    this.strokeGraphics.circle(position.x, position.y, size / 2);
-    this.strokeGraphics.fill({ color: 0xffffff, alpha: this.options.opacity });
+    // Draw with canvas background color to simulate erasing
+    // Canvas background is #1a1a2e
+    this.strokeGraphics
+      .circle(position.x, position.y, size / 2)
+      .fill({ color: 0x1a1a2e, alpha: 1 });
   }
 
   private drawStrokeSegment(
@@ -152,22 +163,22 @@ export class EraserTool extends BaseTool {
     const size = this.options.size;
     const zoom = ctx.engine.getViewport()?.zoom ?? 1;
 
-    // Draw eraser circle outline
-    this.previewGraphics.setStrokeStyle({
-      width: 2 / zoom,
-      color: 0xffffff,
-      alpha: 0.8,
-    });
-    this.previewGraphics.circle(ctx.worldPosition.x, ctx.worldPosition.y, size / 2);
-    this.previewGraphics.stroke();
+    // Draw eraser circle outline (white)
+    this.previewGraphics
+      .circle(ctx.worldPosition.x, ctx.worldPosition.y, size / 2)
+      .stroke({
+        width: 2 / zoom,
+        color: 0xffffff,
+        alpha: 0.8,
+      });
 
-    // Draw inner circle
-    this.previewGraphics.setStrokeStyle({
-      width: 1 / zoom,
-      color: 0x000000,
-      alpha: 0.5,
-    });
-    this.previewGraphics.circle(ctx.worldPosition.x, ctx.worldPosition.y, size / 2 - 1 / zoom);
-    this.previewGraphics.stroke();
+    // Draw inner circle (black)
+    this.previewGraphics
+      .circle(ctx.worldPosition.x, ctx.worldPosition.y, size / 2 - 1 / zoom)
+      .stroke({
+        width: 1 / zoom,
+        color: 0x000000,
+        alpha: 0.5,
+      });
   }
 }

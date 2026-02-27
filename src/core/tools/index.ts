@@ -16,3 +16,6 @@ export { FillTool } from './FillTool';
 export { StampTool } from './StampTool';
 export { TextTool } from './TextTool';
 export { EyedropperTool } from './EyedropperTool';
+
+// Export feature tools
+export * from './features';

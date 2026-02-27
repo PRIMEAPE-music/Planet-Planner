@@ -21,6 +21,8 @@ interface TerrainStoreState {
   setIsGenerating: (value: boolean) => void;
   lastSeed: number;
   setLastSeed: (seed: number) => void;
+  generationError: string | null;
+  setGenerationError: (error: string | null) => void;
 
   // Brush settings for terrain editing
   terrainBrush: {
@@ -81,6 +83,11 @@ export const useTerrainStore = create<TerrainStoreState>()(
     setLastSeed: (seed) =>
       set((state) => {
         state.lastSeed = seed;
+      }),
+    generationError: null,
+    setGenerationError: (error) =>
+      set((state) => {
+        state.generationError = error;
       }),
 
     // Terrain brush

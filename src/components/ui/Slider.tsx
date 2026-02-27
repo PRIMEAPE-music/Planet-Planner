@@ -26,11 +26,12 @@ const Slider = React.forwardRef<HTMLInputElement, SliderProps>(
     },
     ref
   ) => {
-    const currentValue = value?.[0] ?? defaultValue?.[0] ?? min;
-    const percentage = ((currentValue - min) / (max - min)) * 100;
+    const rawValue = value?.[0] ?? defaultValue?.[0] ?? min;
+    const currentValue = Math.min(max, Math.max(min, rawValue));
+    const percentage = max === min ? 0 : ((currentValue - min) / (max - min)) * 100;
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newValue = parseFloat(e.target.value);
+      const newValue = Math.min(max, Math.max(min, parseFloat(e.target.value)));
       onValueChange?.([newValue]);
     };
 

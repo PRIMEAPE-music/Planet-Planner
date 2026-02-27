@@ -4,6 +4,7 @@ import { Grid } from './Grid';
 import { InputHandler } from './InputHandler';
 import type { Vector2, GridConfig, Viewport, CameraConfig } from '@/types';
 import { DEFAULT_CANVAS_DIMENSIONS, CANVAS_CONSTANTS } from '@/constants';
+import { debug } from '@/utils';
 
 export interface CanvasEngineConfig {
   backgroundColor?: string;
@@ -34,12 +35,14 @@ export class CanvasEngine {
   private callbacks: CanvasEngineCallbacks;
   private isInitialized: boolean = false;
   private isPanning: boolean = false;
+  private panMode: boolean = false; // When true, primary clicks will pan
   private lastPointerPosition: Vector2 = { x: 0, y: 0 };
 
   // Background
   private background: Graphics;
   private canvasWidth: number;
   private canvasHeight: number;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor() {
     this.app = new Application();
@@ -64,7 +67,7 @@ export class CanvasEngine {
     callbacks: CanvasEngineCallbacks = {}
   ): Promise<void> {
     if (this.isInitialized) {
-      console.warn('CanvasEngine already initialized');
+      debug.warn('CanvasEngine already initialized');
       return;
     }
 
@@ -72,13 +75,18 @@ export class CanvasEngine {
     this.canvasWidth = config.width ?? DEFAULT_CANVAS_DIMENSIONS.width;
     this.canvasHeight = config.height ?? DEFAULT_CANVAS_DIMENSIONS.height;
 
-    // Initialize Pixi Application
+    // Initialize Pixi Application with WebGL preference and context preservation
     await this.app.init({
       background: config.backgroundColor ?? CANVAS_CONSTANTS.DEFAULT_BACKGROUND_COLOR,
       resizeTo: container,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
+      preference: 'webgl',
+      hello: true, // Shows Pixi.js renderer type in console
+      premultipliedAlpha: true,
+      preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
     });
 
     container.appendChild(this.app.canvas);
@@ -138,8 +146,8 @@ export class CanvasEngine {
   private setupInputHandlers(): void {
     this.inputHandler.on('pointerdown', (state, event) => {
       if (event instanceof PointerEvent) {
-        // Middle mouse or space+click for panning
-        if (state.isMiddleDown || (state.isPrimaryDown && state.modifiers.shift)) {
+        // Middle mouse, shift+click, or pan mode for panning
+        if (state.isMiddleDown || (state.isPrimaryDown && state.modifiers.shift) || (this.panMode && state.isPrimaryDown)) {
           this.isPanning = true;
           this.lastPointerPosition = { ...state.screenPosition };
         } else if (state.isPrimaryDown) {
@@ -180,14 +188,14 @@ export class CanvasEngine {
    * Setup window resize handler
    */
   private setupResizeHandler(): void {
-    const resizeObserver = new ResizeObserver(() => {
+    this.resizeObserver = new ResizeObserver(() => {
       if (this.camera) {
         this.camera.setScreenSize(this.app.screen.width, this.app.screen.height);
         this.emitViewportChange();
       }
     });
 
-    resizeObserver.observe(this.app.canvas);
+    this.resizeObserver.observe(this.app.canvas);
   }
 
   /**
@@ -197,12 +205,12 @@ export class CanvasEngine {
     const canvas = this.app.canvas as HTMLCanvasElement;
 
     canvas.addEventListener('webglcontextlost', (event) => {
-      console.warn('[CanvasEngine] WebGL context lost');
+      debug.warn('[CanvasEngine] WebGL context lost');
       event.preventDefault(); // Allow context to be restored
     });
 
     canvas.addEventListener('webglcontextrestored', () => {
-      console.log('[CanvasEngine] WebGL context restored');
+      debug.log('[CanvasEngine] WebGL context restored');
       // Redraw background
       this.drawBackground();
     });
@@ -291,6 +299,15 @@ export class CanvasEngine {
       width: this.canvasWidth,
       height: this.canvasHeight,
     });
+    // Force immediate update (no smooth transition) for initial setup
+    this.camera.forceUpdate();
+  }
+
+  /**
+   * Enable/disable pan mode (when enabled, primary clicks will pan)
+   */
+  setPanMode(enabled: boolean): void {
+    this.panMode = enabled;
   }
 
   /**
@@ -345,6 +362,8 @@ export class CanvasEngine {
   destroy(): void {
     if (!this.isInitialized) return;
 
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.app.ticker.remove(this.update);
     this.inputHandler.destroy();
     this.grid.destroy();

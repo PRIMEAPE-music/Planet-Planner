@@ -97,6 +97,16 @@ export interface TextToolOptions extends BaseToolOptions {
 }
 
 /**
+ * Stamp tool specific options
+ */
+export interface StampToolOptions extends BaseToolOptions {
+  /** Rotation in degrees */
+  rotation: number;
+  /** Scale factor */
+  scale: number;
+}
+
+/**
  * Union of all tool options
  */
 export type ToolOptions =
@@ -104,6 +114,7 @@ export type ToolOptions =
   | ShapeToolOptions
   | PathToolOptions
   | TextToolOptions
+  | StampToolOptions
   | BaseToolOptions;
 
 /**

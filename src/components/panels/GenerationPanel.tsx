@@ -103,7 +103,7 @@ interface GenerationPanelProps {
   onGenerate?: (seed?: number) => void;
 }
 
-export function GenerationPanel({ onGenerate }: GenerationPanelProps) {
+export function GenerationPanel({ onGenerate: _onGenerate }: GenerationPanelProps) {
   const config = useGenerationConfig();
   const isGenerating = useIsGenerating();
   const progress = useGenerationProgressData();
@@ -113,6 +113,7 @@ export function GenerationPanel({ onGenerate }: GenerationPanelProps) {
   const setPreset = useGenerationStore((s) => s.setPreset);
   const randomizeSeed = useGenerationStore((s) => s.randomizeSeed);
   const setSeed = useGenerationStore((s) => s.setSeed);
+  const generate = useGenerationStore((s) => s.generate);
   const cancelGeneration = useGenerationStore((s) => s.cancelGeneration);
   const undo = useGenerationStore((s) => s.undo);
   const redo = useGenerationStore((s) => s.redo);
@@ -131,10 +132,12 @@ export function GenerationPanel({ onGenerate }: GenerationPanelProps) {
     [setSeed]
   );
 
-  const handleGenerate = useCallback(() => {
-    // Use the seed from config to generate terrain
-    onGenerate?.(config.seed.value);
-  }, [onGenerate, config.seed.value]);
+  const handleGenerate = useCallback(async () => {
+    // Run the LandmassGenerator via the store.
+    // The result is automatically rendered to the terrain layer
+    // via the useEffect in App.tsx that watches generationResult.
+    await generate();
+  }, [generate]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-ink-900">

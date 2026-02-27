@@ -2,7 +2,7 @@ import { BaseTool } from './BaseTool';
 import type { ToolContext, ToolCursor, ToolOperationResult } from './types';
 
 /**
- * Pan tool - handled by canvas engine directly, this is mostly a placeholder
+ * Pan tool - enables panning on primary click
  */
 export class PanTool extends BaseTool {
   readonly id = 'pan';
@@ -12,6 +12,18 @@ export class PanTool extends BaseTool {
 
   getCursor(): ToolCursor {
     return { type: 'grab' };
+  }
+
+  onActivate(ctx: ToolContext): void {
+    super.onActivate(ctx);
+    // Enable pan mode in the engine
+    ctx.engine.setPanMode(true);
+  }
+
+  onDeactivate(ctx: ToolContext): void {
+    // Disable pan mode in the engine
+    ctx.engine.setPanMode(false);
+    super.onDeactivate(ctx);
   }
 
   onPointerDown(_ctx: ToolContext): void {

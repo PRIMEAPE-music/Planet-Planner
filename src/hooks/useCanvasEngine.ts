@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { CanvasEngine, ToolManager, LayerManager } from '@/core';
-import { useCanvasStore, useToolStore, useLayerStore } from '@/stores';
+import { useCanvasStore, useToolStore, useLayerStore, useHistoryStore } from '@/stores';
 import type { InputState } from '@/types';
+import type { HistoryCommand } from '@/core/history/commands';
+import { debug } from '@/utils';
 
 export interface UseCanvasEngineOptions {
   containerRef: React.RefObject<HTMLDivElement | null>;
-  onReady?: (engine: CanvasEngine) => void;
+  onReady?: (engine: CanvasEngine, layerManager: LayerManager) => void;
 }
 
 export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOptions) {
@@ -16,7 +18,9 @@ export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOption
 
   // Store hooks
   const { setViewport, grid, setGrid } = useCanvasStore();
-  const { activeTool, options: toolOptions } = useToolStore();
+  const activeTool = useToolStore((s) => s.activeTool);
+  // Subscribe to the active tool's options specifically to trigger updates
+  const activeToolOptions = useToolStore((s) => s.options[activeTool]);
   const layerState = useLayerStore();
 
   // Track current input state for tools
@@ -92,6 +96,9 @@ export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOption
         const lm = new LayerManager(worldContainer);
         layerManagerRef.current = lm;
 
+        // Register LayerManager with history store for graphics undo/redo
+        useHistoryStore.getState().setLayerManager(lm);
+
         // Initialize tool manager
         toolManagerRef.current = new ToolManager(engine, lm, {
           getActiveLayerId: () => useLayerStore.getState().activeId,
@@ -100,22 +107,42 @@ export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOption
             return state.options[id as keyof typeof state.options];
           },
           onOperationComplete: (result) => {
-            console.log('Operation complete:', result);
-            // Here we would add to history for undo/redo
+            debug.log('Operation complete:', result);
+            // Wrap tool result into a graphics:add command
+            if (result && result.undoData) {
+              const cmd: HistoryCommand = {
+                kind: 'graphics:add',
+                operationType: result.type,
+                layerId: result.layerId,
+                graphics: result.redoData as import('pixi.js').Container,
+              };
+              useHistoryStore.getState().push(cmd);
+            }
+          },
+          onColorPicked: (color) => {
+            useToolStore.getState().setPrimaryColor(color);
           },
         });
 
         // Sync initial layer state
-        lm.syncWithState(useLayerStore.getState());
+        const layerState = useLayerStore.getState();
+        debug.log('[useCanvasEngine] Syncing initial layer state:', {
+          layerCount: Object.keys(layerState.layers).length,
+          rootOrder: layerState.rootOrder,
+          activeId: layerState.activeId,
+        });
+        lm.syncWithState(layerState);
 
         // Set initial tool
+        debug.log('[useCanvasEngine] Setting initial tool:', activeTool);
         toolManagerRef.current.setActiveTool(activeTool);
 
         setIsReady(true);
-        onReady?.(engine);
+        debug.log('[useCanvasEngine] Engine ready, calling onReady callback');
+        onReady?.(engine, lm);
       });
 
-    // Setup keyboard event listeners for modifiers
+    // Setup keyboard event listeners for modifiers and tool events
     const handlePointerEvent = (e: PointerEvent) => {
       updateModifiers(e);
       // Update pressure if available
@@ -124,14 +151,45 @@ export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOption
       }
     };
 
-    containerRef.current?.addEventListener('pointerdown', handlePointerEvent);
-    containerRef.current?.addEventListener('pointermove', handlePointerEvent);
-    containerRef.current?.addEventListener('pointerup', handlePointerEvent);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Always route Escape to tools (for path finalization, text cancel, etc.)
+      if (e.key === 'Escape') {
+        toolManagerRef.current?.handleKeyDown(e.key);
+        return;
+      }
+
+      // Don't route other keys if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Route to active tool
+      toolManagerRef.current?.handleKeyDown(e.key);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Don't route to tools if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Route to active tool
+      toolManagerRef.current?.handleKeyUp(e.key);
+    };
+
+    const container = containerRef.current;
+    container?.addEventListener('pointerdown', handlePointerEvent);
+    container?.addEventListener('pointermove', handlePointerEvent);
+    container?.addEventListener('pointerup', handlePointerEvent);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 
     return () => {
-      containerRef.current?.removeEventListener('pointerdown', handlePointerEvent);
-      containerRef.current?.removeEventListener('pointermove', handlePointerEvent);
-      containerRef.current?.removeEventListener('pointerup', handlePointerEvent);
+      container?.removeEventListener('pointerdown', handlePointerEvent);
+      container?.removeEventListener('pointermove', handlePointerEvent);
+      container?.removeEventListener('pointerup', handlePointerEvent);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
       toolManagerRef.current?.destroy();
       layerManagerRef.current?.destroy();
       engine.destroy();
@@ -144,18 +202,21 @@ export function useCanvasEngine({ containerRef, onReady }: UseCanvasEngineOption
   // Sync active tool
   useEffect(() => {
     if (isReady && toolManagerRef.current) {
+      debug.log('[useCanvasEngine] Syncing tool:', activeTool);
       toolManagerRef.current.setActiveTool(activeTool);
+    }
+  }, [isReady, activeTool]);
 
-      // Update tool options
+  // Sync active tool options (separate effect to trigger on option changes)
+  useEffect(() => {
+    if (isReady && toolManagerRef.current) {
       const tool = toolManagerRef.current.getTool(activeTool);
-      if (tool && 'setOptions' in tool) {
-        const opts = toolOptions[activeTool as keyof typeof toolOptions];
-        if (opts) {
-          (tool as any).setOptions(opts);
-        }
+      if (tool && 'setOptions' in tool && activeToolOptions) {
+        debug.log('[useCanvasEngine] Updating tool options:', activeToolOptions);
+        (tool as any).setOptions(activeToolOptions);
       }
     }
-  }, [isReady, activeTool, toolOptions]);
+  }, [isReady, activeTool, activeToolOptions]);
 
   // Sync grid config
   useEffect(() => {

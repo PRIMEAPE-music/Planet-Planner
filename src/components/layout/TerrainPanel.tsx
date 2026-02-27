@@ -32,6 +32,7 @@ export function TerrainPanel({ onGenerate, onStyleChange }: TerrainPanelProps) {
   const terrainBrush = useTerrainStore((s) => s.terrainBrush);
   const isGenerating = useTerrainStore((s) => s.isGenerating);
   const lastSeed = useTerrainStore((s) => s.lastSeed);
+  const generationError = useTerrainStore((s) => s.generationError);
 
   // Get actions from store
   const setStyle = useTerrainStore((s) => s.setStyle);
@@ -312,7 +313,11 @@ export function TerrainPanel({ onGenerate, onStyleChange }: TerrainPanelProps) {
 
       {/* Footer */}
       <div className="px-3 py-1.5 border-t border-ink-700 text-xs text-ink-400">
-        Seed: {lastSeed}
+        {generationError ? (
+          <span className="text-red-400">Error: {generationError}</span>
+        ) : (
+          <>Seed: {lastSeed}</>
+        )}
       </div>
     </div>
   );

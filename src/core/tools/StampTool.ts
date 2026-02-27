@@ -1,4 +1,4 @@
-import { Sprite, Texture } from 'pixi.js';
+import { Sprite, Texture, Graphics } from 'pixi.js';
 import { BaseTool } from './BaseTool';
 import type { ToolContext, ToolCursor, ToolOperationResult } from './types';
 import type { BaseToolOptions } from '@/types';
@@ -28,6 +28,21 @@ export class StampTool extends BaseTool {
     rotation: 0,
     scale: 1,
   };
+
+  constructor() {
+    super();
+    // Create a default stamp texture (a simple circle)
+    this.createDefaultTexture();
+  }
+
+  /**
+   * Create a default stamp texture
+   */
+  private createDefaultTexture(): void {
+    // Use a simple white square as default stamp
+    // Users can replace this with setTexture() later
+    this.currentTexture = Texture.WHITE;
+  }
 
   setOptions(options: Partial<StampToolOptions>): void {
     this.options = { ...this.options, ...options };
@@ -73,17 +88,27 @@ export class StampTool extends BaseTool {
   }
 
   onPointerDown(ctx: ToolContext): void {
-    if (!ctx.activeLayer || !this.currentTexture) return;
+    if (!ctx.activeLayer) return;
 
-    // Create stamp sprite
-    const stamp = new Sprite(this.currentTexture);
-    stamp.anchor.set(0.5);
-    stamp.position.set(ctx.worldPosition.x, ctx.worldPosition.y);
-    stamp.rotation = this.options.rotation;
-    stamp.scale.set(this.options.scale);
-    stamp.alpha = this.options.opacity;
+    // Create a simple stamp graphic (since texture might not be visible)
+    // Draw a circle with the primary color
+    const stampGraphics = new Graphics();
+    const size = this.options.size;
 
-    ctx.activeLayer.addContent(stamp);
+    stampGraphics
+      .circle(0, 0, size / 2)
+      .fill({ color: parseInt(this.options.primaryColor.replace('#', ''), 16), alpha: this.options.opacity });
+
+    // Add border for visibility
+    stampGraphics
+      .circle(0, 0, size / 2)
+      .stroke({ width: 2, color: parseInt(this.options.secondaryColor.replace('#', ''), 16), alpha: this.options.opacity });
+
+    stampGraphics.position.set(ctx.worldPosition.x, ctx.worldPosition.y);
+    stampGraphics.rotation = this.options.rotation;
+    stampGraphics.scale.set(this.options.scale);
+
+    ctx.activeLayer.addContent(stampGraphics);
     ctx.activeLayer.markDirty();
   }
 
@@ -106,18 +131,18 @@ export class StampTool extends BaseTool {
       this.previewGraphics.clear();
       const zoom = ctx.engine.getViewport()?.zoom ?? 1;
 
-      this.previewGraphics.setStrokeStyle({
-        width: 1 / zoom,
-        color: 0xffffff,
-        alpha: 0.5,
-      });
-      this.previewGraphics.rect(
-        ctx.worldPosition.x - this.options.size / 2,
-        ctx.worldPosition.y - this.options.size / 2,
-        this.options.size,
-        this.options.size
-      );
-      this.previewGraphics.stroke();
+      this.previewGraphics
+        .rect(
+          ctx.worldPosition.x - this.options.size / 2,
+          ctx.worldPosition.y - this.options.size / 2,
+          this.options.size,
+          this.options.size
+        )
+        .stroke({
+          width: 1 / zoom,
+          color: 0xffffff,
+          alpha: 0.5,
+        });
     }
   }
 }

@@ -75,7 +75,10 @@ export class ParchmentGenerator {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('[ParchmentGenerator] Failed to get 2D canvas context');
+    }
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -170,7 +173,10 @@ export class ParchmentGenerator {
       target: texture,
     });
 
-    sprite.destroy();
+    sprite.destroy({ texture: true, textureSource: true });
+    // Release the intermediate canvas memory
+    canvas.width = 0;
+    canvas.height = 0;
 
     return texture;
   }
@@ -194,7 +200,10 @@ export class ParchmentGenerator {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('[ParchmentGenerator] Failed to get 2D canvas context');
+    }
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
 
@@ -249,7 +258,10 @@ export class ParchmentGenerator {
       target: texture,
     });
 
-    sprite.destroy();
+    sprite.destroy({ texture: true, textureSource: true });
+    // Release the intermediate canvas memory
+    canvas.width = 0;
+    canvas.height = 0;
 
     return texture;
   }

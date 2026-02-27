@@ -2,7 +2,8 @@ import { Container, Graphics, Sprite } from 'pixi.js';
 import type { Layer as LayerData, BlendMode, Bounds } from '@/types';
 
 /**
- * Map our blend mode names to Pixi.js blend modes
+ * Map app-level blend modes to Pixi v8 blend mode strings.
+ * Pixi v8 accepts CSS-style blend mode names directly.
  */
 const BLEND_MODE_MAP: Record<BlendMode, string> = {
   'normal': 'normal',
@@ -36,16 +37,16 @@ export class LayerContainer {
     this.id = data.id;
     this._data = data;
 
-    // Main container (for transforms, blend modes)
+    // Main container (for transforms, blend modes, AND content)
     this.container = new Container();
     this.container.label = `layer-${data.id}`;
 
-    // Content container (for actual drawing)
-    this.contentContainer = new Container();
-    this.contentContainer.label = `layer-content-${data.id}`;
-    this.container.addChild(this.contentContainer);
+    // CRITICAL FIX: Pixi v8 sets blendMode to "inherit" by default which breaks rendering!
+    // Must explicitly set to "normal" to match working test container
+    this.container.blendMode = 'normal';
 
-    this.applyProperties();
+    // Make contentContainer the same as container to reduce nesting depth
+    this.contentContainer = this.container;
   }
 
   /**
@@ -70,7 +71,10 @@ export class LayerContainer {
   private applyProperties(): void {
     this.container.visible = this._data.visible;
     this.container.alpha = this._data.opacity;
-    this.container.blendMode = BLEND_MODE_MAP[this._data.blendMode] as any;
+
+    // Apply blend mode (Pixi v8 accepts CSS blend mode names directly)
+    const pixiBlend = BLEND_MODE_MAP[this._data.blendMode] ?? 'normal';
+    this.container.blendMode = pixiBlend as any;
   }
 
   /**

@@ -261,16 +261,22 @@ export class RenderPipeline {
       target: renderTexture,
     }) as HTMLCanvasElement;
 
-    // Convert to blob
+    // Convert to blob with a timeout to prevent hanging
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        renderTexture.destroy(true);
+        reject(new Error('Export timed out after 30 seconds'));
+      }, 30000);
+
       canvas.toBlob(
         (blob) => {
+          clearTimeout(timeout);
+          renderTexture.destroy(true);
           if (blob) {
             resolve(blob);
           } else {
             reject(new Error('Failed to export canvas'));
           }
-          renderTexture.destroy(true);
         },
         `image/${format}`,
         quality

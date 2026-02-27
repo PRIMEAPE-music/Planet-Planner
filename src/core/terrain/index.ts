@@ -4,3 +4,5 @@ export { ElevationMap } from './ElevationMap';
 export type { ElevationGeneratorConfig } from './ElevationMap';
 export { TerrainRenderer } from './TerrainRenderer';
 export { TerrainLayer } from './TerrainLayer';
+export { FeatureRenderer } from './FeatureRenderer';
+export type { FeatureRenderOptions } from './FeatureRenderer';

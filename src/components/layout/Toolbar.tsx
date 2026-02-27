@@ -20,7 +20,7 @@ import {
   Undo,
   Redo,
 } from 'lucide-react';
-import { useToolStore, useCanvasStore } from '@/stores';
+import { useToolStore, useCanvasStore, useHistoryStore } from '@/stores';
 import {
   Button,
   Toggle,
@@ -30,6 +30,8 @@ import {
   TooltipProvider,
 } from '@/components/ui';
 import type { ToolType } from '@/types';
+import type { CanvasEngine } from '@/core';
+import { debug } from '@/utils';
 
 const TOOLS: { type: ToolType; icon: React.ElementType; label: string; shortcut?: string }[] = [
   { type: 'select', icon: MousePointer2, label: 'Select', shortcut: 'V' },
@@ -44,14 +46,78 @@ const TOOLS: { type: ToolType; icon: React.ElementType; label: string; shortcut?
   { type: 'eyedropper', icon: Pipette, label: 'Eyedropper', shortcut: 'I' },
 ];
 
-export function Toolbar() {
+interface ToolbarProps {
+  engine?: CanvasEngine | null;
+}
+
+export function Toolbar({ engine }: ToolbarProps) {
   // Use individual selectors to avoid re-render issues
   const activeTool = useToolStore((s) => s.activeTool);
   const setActiveTool = useToolStore((s) => s.setActiveTool);
 
   const grid = useCanvasStore((s) => s.grid);
+  const viewport = useCanvasStore((s) => s.viewport);
   const toggleGrid = useCanvasStore((s) => s.toggleGrid);
   const toggleSnapToGrid = useCanvasStore((s) => s.toggleSnapToGrid);
+
+  // History state for enabling/disabling undo/redo buttons
+  const undoStack = useHistoryStore((s) => s.undoStack);
+  const redoStack = useHistoryStore((s) => s.redoStack);
+  const canUndo = undoStack.length > 0;
+  const canRedo = redoStack.length > 0;
+
+  const handleZoomIn = () => {
+    if (engine) {
+      engine.setZoom(viewport.zoom * 1.25);
+    }
+  };
+
+  const handleZoomOut = () => {
+    if (engine) {
+      engine.setZoom(viewport.zoom * 0.8);
+    }
+  };
+
+  const handleFitToCanvas = () => {
+    if (engine) {
+      engine.fitToCanvas();
+    }
+  };
+
+  const handleResetView = () => {
+    if (engine) {
+      engine.resetCamera();
+    }
+  };
+
+  const handleExport = async () => {
+    if (!engine) return;
+
+    try {
+      // Get the Pixi application's canvas
+      const app = engine.getApp();
+      if (!app?.canvas) {
+        console.error('No canvas available for export');
+        return;
+      }
+
+      // Convert canvas to data URL
+      const canvas = app.canvas as HTMLCanvasElement;
+      const dataUrl = canvas.toDataURL('image/png');
+
+      // Create download link
+      const link = document.createElement('a');
+      link.download = `planet-map-${Date.now()}.png`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      debug.log('Map exported successfully');
+    } catch (error) {
+      console.error('Export failed:', error);
+    }
+  };
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -60,7 +126,14 @@ export function Toolbar() {
         <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" disabled className="h-8 w-8">
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={!canUndo}
+                className="h-8 w-8"
+                onClick={() => useHistoryStore.getState().undo()}
+                aria-label="Undo (Ctrl+Z)"
+              >
                 <Undo className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -69,7 +142,14 @@ export function Toolbar() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" disabled className="h-8 w-8">
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={!canRedo}
+                className="h-8 w-8"
+                onClick={() => useHistoryStore.getState().redo()}
+                aria-label="Redo (Ctrl+Y)"
+              >
                 <Redo className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -87,6 +167,7 @@ export function Toolbar() {
                   onPressedChange={() => setActiveTool(type)}
                   size="sm"
                   className="h-8 w-8"
+                  aria-label={`${label}${shortcut ? ` (${shortcut})` : ''}`}
                 >
                   <Icon className="h-4 w-4" />
                 </Toggle>
@@ -110,6 +191,7 @@ export function Toolbar() {
                 onPressedChange={toggleGrid}
                 size="sm"
                 className="h-8 w-8"
+                aria-label="Toggle Grid"
               >
                 <Grid3x3 className="h-4 w-4" />
               </Toggle>
@@ -124,6 +206,7 @@ export function Toolbar() {
                 onPressedChange={toggleSnapToGrid}
                 size="sm"
                 className="h-8 w-8"
+                aria-label="Snap to Grid"
               >
                 <Magnet className="h-4 w-4" />
               </Toggle>
@@ -143,7 +226,7 @@ export function Toolbar() {
         <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomOut} aria-label="Zoom Out">
                 <ZoomOut className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -152,7 +235,7 @@ export function Toolbar() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomIn} aria-label="Zoom In">
                 <ZoomIn className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -161,7 +244,7 @@ export function Toolbar() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleFitToCanvas} aria-label="Fit to Canvas">
                 <Maximize2 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -170,7 +253,7 @@ export function Toolbar() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleResetView} aria-label="Reset View">
                 <RotateCcw className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -181,7 +264,7 @@ export function Toolbar() {
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExport} aria-label="Export Map">
                 <Download className="h-4 w-4" />
               </Button>
             </TooltipTrigger>

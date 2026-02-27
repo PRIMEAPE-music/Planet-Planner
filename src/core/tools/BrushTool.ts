@@ -3,7 +3,7 @@ import { BaseTool } from './BaseTool';
 import { StrokeSmoother } from './StrokeSmoothing';
 import type { ToolContext, ToolCursor, ToolOperationResult } from './types';
 import type { BrushToolOptions, Vector2 } from '@/types';
-import { hexToNumber, vec2Length, vec2Sub, vec2Lerp } from '@/utils';
+import { hexToNumber, vec2Length, vec2Sub, vec2Lerp, debug } from '@/utils';
 
 /**
  * Brush tool for terrain painting
@@ -73,14 +73,29 @@ export class BrushTool extends BaseTool {
    * Handle pointer down - start stroke
    */
   onPointerDown(ctx: ToolContext): void {
-    if (!ctx.activeLayer) return;
+    if (!ctx.activeLayer) {
+      console.error('[BrushTool] No active layer!');
+      return;
+    }
 
     // Reset smoother for new stroke
     this.smoother.reset();
 
     // Create graphics for this stroke
     this.strokeGraphics = new Graphics();
+    this.strokeGraphics.zIndex = 100; // Render on top of terrain
     ctx.activeLayer.addContent(this.strokeGraphics);
+
+    debug.log('[BrushTool] Created stroke graphics:', {
+      layerId: ctx.activeLayer.id,
+      layerName: ctx.activeLayer.data.name,
+      position: ctx.worldPosition,
+      options: this.options,
+      graphicsVisible: this.strokeGraphics.visible,
+      graphicsAlpha: this.strokeGraphics.alpha,
+      graphicsPosition: { x: this.strokeGraphics.x, y: this.strokeGraphics.y },
+      parent: this.strokeGraphics.parent?.constructor.name,
+    });
 
     // Get pressure
     const pressure = this.options.pressureSensitivity ? ctx.input.pressure || 1 : 1;
@@ -91,6 +106,14 @@ export class BrushTool extends BaseTool {
       this.drawBrushDab(point.position, point.pressure);
       this.lastDrawnPoint = point.position;
       this.lastPressure = point.pressure;
+
+      debug.log('[BrushTool] Drew first dab at:', point.position, 'pressure:', point.pressure);
+      debug.log('[BrushTool] Graphics bounds after draw:', {
+        x: this.strokeGraphics.bounds.x,
+        y: this.strokeGraphics.bounds.y,
+        width: this.strokeGraphics.bounds.width,
+        height: this.strokeGraphics.bounds.height,
+      });
     }
   }
 
@@ -161,9 +184,11 @@ export class BrushTool extends BaseTool {
 
     const color = hexToNumber(this.options.primaryColor);
 
-    // Draw circular dab
-    this.strokeGraphics.circle(position.x, position.y, size / 2);
-    this.strokeGraphics.fill({ color, alpha: opacity * this.calculateHardnessAlpha() });
+    // Draw circular dab using Pixi v8 API
+    // Each circle needs its own fill call to render properly
+    this.strokeGraphics
+      .circle(position.x, position.y, size / 2)
+      .fill({ color, alpha: opacity * this.calculateHardnessAlpha() });
   }
 
   /**

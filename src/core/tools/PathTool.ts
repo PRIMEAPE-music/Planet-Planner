@@ -2,7 +2,7 @@ import { Graphics } from 'pixi.js';
 import { BaseTool } from './BaseTool';
 import type { ToolContext, ToolCursor, ToolOperationResult } from './types';
 import type { PathToolOptions, Vector2 } from '@/types';
-import { hexToNumber, vec2Length, vec2Sub, vec2Add, vec2Scale, vec2Normalize } from '@/utils';
+import { hexToNumber, vec2Length, vec2Sub, vec2Add, vec2Scale, vec2Normalize, debug } from '@/utils';
 
 interface PathNode {
   position: Vector2;
@@ -51,7 +51,7 @@ export class PathTool extends BaseTool {
   onPointerDown(ctx: ToolContext): void {
     if (!ctx.activeLayer) return;
 
-    // Check if clicking near existing node
+    // Check if clicking near existing node (for editing)
     const clickedNodeIndex = this.findNodeAtPosition(ctx.worldPosition);
 
     if (clickedNodeIndex >= 0) {
@@ -66,16 +66,11 @@ export class PathTool extends BaseTool {
       } else if (this.isNearPoint(ctx.worldPosition, node.controlOut, 10)) {
         this.dragMode = 'controlOut';
       }
-    } else {
-      // Add new node
-      if (!this.isDrawing) {
-        // Start new path
-        this.isDrawing = true;
-        this.pathGraphics = new Graphics();
-        ctx.activeLayer.addContent(this.pathGraphics);
-        this.nodes = [];
-      }
+      return;
+    }
 
+    // Only add new nodes if in drawing mode
+    if (this.isDrawing) {
       // Create new node with auto-smoothed control points
       const newNode = this.createNode(ctx.worldPosition);
       this.nodes.push(newNode);
@@ -85,6 +80,18 @@ export class PathTool extends BaseTool {
       this.smoothControlPoints();
 
       // Redraw path
+      this.redrawPath();
+    } else if (this.nodes.length === 0) {
+      // Start new path if no existing path
+      this.isDrawing = true;
+      this.pathGraphics = new Graphics();
+      ctx.activeLayer.addContent(this.pathGraphics);
+      this.nodes = [];
+
+      // Create first node
+      const newNode = this.createNode(ctx.worldPosition);
+      this.nodes.push(newNode);
+      this.selectedNodeIndex = this.nodes.length - 1;
       this.redrawPath();
     }
   }
@@ -136,8 +143,15 @@ export class PathTool extends BaseTool {
   onKeyDown(ctx: ToolContext, key: string): void {
     switch (key) {
       case 'Enter':
+        // Stop drawing mode but keep path editable
+        if (this.isDrawing) {
+          this.isDrawing = false;
+          debug.log('[PathTool] Stopped drawing, path remains editable');
+        }
+        break;
+
       case 'Escape':
-        // Complete path
+        // Complete path and finalize
         this.completePath(ctx);
         break;
 
@@ -172,11 +186,12 @@ export class PathTool extends BaseTool {
     const layerId = ctx.activeLayer?.id ?? '';
     const pathRef = this.pathGraphics;
 
-    // Reset state
+    // Reset state - clear nodes and finalize
     this.isDrawing = false;
     this.pathGraphics = null;
     this.nodes = [];
     this.selectedNodeIndex = -1;
+    this.dragMode = null;
 
     ctx.activeLayer?.markDirty();
 
@@ -186,6 +201,20 @@ export class PathTool extends BaseTool {
       undoData: { graphics: pathRef },
       redoData: { graphics: pathRef },
     };
+  }
+
+  /**
+   * Finalize path when tool is deactivated
+   */
+  onDeactivate(ctx: ToolContext): void {
+    // Finalize any active path when switching tools
+    if (this.pathGraphics && this.nodes.length >= 2) {
+      this.completePath(ctx);
+    } else if (this.pathGraphics) {
+      // Cancel incomplete path
+      this.cancelPath();
+    }
+    super.onDeactivate(ctx);
   }
 
   /**
@@ -326,49 +355,52 @@ export class PathTool extends BaseTool {
 
     const zoom = ctx.engine.getViewport()?.zoom ?? 1;
 
-    // Draw node handles when editing
-    if (this.isDrawing && this.nodes.length > 0) {
+    // Draw node handles when there are nodes (in drawing or editing mode)
+    if (this.nodes.length > 0) {
       // Draw control point handles
       for (let i = 0; i < this.nodes.length; i++) {
         const node = this.nodes[i]!;
         const isSelected = i === this.selectedNodeIndex;
 
         // Control point lines
-        this.previewGraphics.setStrokeStyle({
-          width: 1 / zoom,
-          color: 0x888888,
-          alpha: 0.6,
-        });
-        this.previewGraphics.moveTo(node.controlIn.x, node.controlIn.y);
-        this.previewGraphics.lineTo(node.position.x, node.position.y);
-        this.previewGraphics.lineTo(node.controlOut.x, node.controlOut.y);
-        this.previewGraphics.stroke();
+        this.previewGraphics
+          .moveTo(node.controlIn.x, node.controlIn.y)
+          .lineTo(node.position.x, node.position.y)
+          .lineTo(node.controlOut.x, node.controlOut.y)
+          .stroke({
+            width: 1 / zoom,
+            color: 0x888888,
+            alpha: 0.6,
+          });
 
         // Node point
-        this.previewGraphics.circle(node.position.x, node.position.y, 5 / zoom);
-        this.previewGraphics.fill({ color: isSelected ? 0x00ff00 : 0xffffff });
+        this.previewGraphics
+          .circle(node.position.x, node.position.y, 5 / zoom)
+          .fill({ color: isSelected ? 0x00ff00 : 0xffffff });
 
         // Control points
-        this.previewGraphics.circle(node.controlIn.x, node.controlIn.y, 3 / zoom);
-        this.previewGraphics.fill({ color: 0x0088ff });
-        this.previewGraphics.circle(node.controlOut.x, node.controlOut.y, 3 / zoom);
-        this.previewGraphics.fill({ color: 0xff8800 });
+        this.previewGraphics
+          .circle(node.controlIn.x, node.controlIn.y, 3 / zoom)
+          .fill({ color: 0x0088ff });
+        this.previewGraphics
+          .circle(node.controlOut.x, node.controlOut.y, 3 / zoom)
+          .fill({ color: 0xff8800 });
       }
     }
 
-    // Cursor crosshair
-    if (!ctx.isStroking) {
+    // Cursor crosshair (only show if not dragging and in drawing mode)
+    if (!ctx.isStroking && this.isDrawing) {
       const size = 8 / zoom;
-      this.previewGraphics.setStrokeStyle({
-        width: 1 / zoom,
-        color: 0xffffff,
-        alpha: 0.8,
-      });
-      this.previewGraphics.moveTo(ctx.worldPosition.x - size, ctx.worldPosition.y);
-      this.previewGraphics.lineTo(ctx.worldPosition.x + size, ctx.worldPosition.y);
-      this.previewGraphics.moveTo(ctx.worldPosition.x, ctx.worldPosition.y - size);
-      this.previewGraphics.lineTo(ctx.worldPosition.x, ctx.worldPosition.y + size);
-      this.previewGraphics.stroke();
+      this.previewGraphics
+        .moveTo(ctx.worldPosition.x - size, ctx.worldPosition.y)
+        .lineTo(ctx.worldPosition.x + size, ctx.worldPosition.y)
+        .moveTo(ctx.worldPosition.x, ctx.worldPosition.y - size)
+        .lineTo(ctx.worldPosition.x, ctx.worldPosition.y + size)
+        .stroke({
+          width: 1 / zoom,
+          color: 0xffffff,
+          alpha: 0.8,
+        });
     }
   }
 }

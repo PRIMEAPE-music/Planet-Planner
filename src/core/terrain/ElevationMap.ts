@@ -111,6 +111,20 @@ export class ElevationMap {
   }
 
   /**
+   * Load elevation data from an external heightmap (e.g., from LandmassGenerator)
+   */
+  setData(heightmap: Float32Array, width: number, height: number): void {
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < heightmap.length; i++) {
+      const v = heightmap[i] ?? 0;
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+    this.data = { values: new Float32Array(heightmap), width, height, min, max };
+  }
+
+  /**
    * Get elevation data
    */
   getData(): ElevationData | null {
@@ -231,7 +245,7 @@ export class ElevationMap {
         if (heightDiff > 0) {
           // Moving downhill - erode and carry sediment
           const erosion = Math.min(heightDiff, erosionStrength);
-          values[idx] = currentVal - erosion;
+          values[idx] = Math.max(0, currentVal - erosion);
           sediment += erosion;
           speed = Math.min(2, speed + 0.1);
         } else {

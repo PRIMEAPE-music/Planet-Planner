@@ -7,6 +7,22 @@ import type {
 import type { Vector2 } from '@/types';
 
 /**
+ * Generation constants — extracted from inline magic numbers.
+ */
+
+/** Tectonic plate noise scale factor: sqrt(plateCount) * this value gives the spatial frequency */
+const PLATE_SCALE_FACTOR = 2;
+
+/** Pixel search radius for detecting coastline transitions (land ↔ water) */
+const COASTLINE_SEARCH_RADIUS = 3;
+
+/** Minimum pixel area for a landmass to count as a continent (vs. small island noise) */
+const MIN_CONTINENT_PIXELS = 1000;
+
+/** Distance threshold (F2−F1) below which a pixel is considered on a tectonic plate boundary */
+const PLATE_BOUNDARY_THRESHOLD = 0.1;
+
+/**
  * Main landmass generation engine
  * Produces heightmaps and land masks from configuration
  */
@@ -274,7 +290,7 @@ export class LandmassGenerator {
     const plateNoise = new WorleyNoise(this.config.seed.value + 2000);
 
     // Assign plates
-    const plateScale = Math.sqrt(plateCount) * 2;
+    const plateScale = Math.sqrt(plateCount) * PLATE_SCALE_FACTOR;
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -289,7 +305,7 @@ export class LandmassGenerator {
         // Modify heightmap at plate boundaries
         const boundaryDist = plateNoise.noise2D_F1F2(nx, ny);
 
-        if (boundaryDist < 0.1) {
+        if (boundaryDist < PLATE_BOUNDARY_THRESHOLD) {
           // At boundary
           // Add noise to boundary
           const bNoise =
@@ -404,22 +420,20 @@ export class LandmassGenerator {
   private findCoastlinePixels(landMask: Uint8Array): Vector2[] {
     const { width, height } = this.config;
     const pixels: Vector2[] = [];
-    const searchRadius = 3;
-
-    for (let y = searchRadius; y < height - searchRadius; y++) {
-      for (let x = searchRadius; x < width - searchRadius; x++) {
+    for (let y = COASTLINE_SEARCH_RADIUS; y < height - COASTLINE_SEARCH_RADIUS; y++) {
+      for (let x = COASTLINE_SEARCH_RADIUS; x < width - COASTLINE_SEARCH_RADIUS; x++) {
         // Check if near coastline
         let nearWater = false;
         let nearLand = false;
 
         for (
-          let dy = -searchRadius;
-          dy <= searchRadius && !(nearWater && nearLand);
+          let dy = -COASTLINE_SEARCH_RADIUS;
+          dy <= COASTLINE_SEARCH_RADIUS && !(nearWater && nearLand);
           dy++
         ) {
           for (
-            let dx = -searchRadius;
-            dx <= searchRadius && !(nearWater && nearLand);
+            let dx = -COASTLINE_SEARCH_RADIUS;
+            dx <= COASTLINE_SEARCH_RADIUS && !(nearWater && nearLand);
             dx++
           ) {
             const ni = (y + dy) * width + (x + dx);
@@ -478,6 +492,9 @@ export class LandmassGenerator {
     const islands = this.config.islands;
     const islandCenters: Vector2[] = [];
 
+    // Pre-compute distance-to-land map (O(width*height) BFS, replaces per-query O(n²) ring search)
+    const distMap = this.buildDistanceMap(landMask);
+
     // Generate cluster centers
     const clusterCenters: Vector2[] = [];
     const clusterRng = this.seededRandom(this.config.seed.value + 4000);
@@ -491,9 +508,9 @@ export class LandmassGenerator {
         const y = Math.floor(clusterRng() * height);
         const idx = y * width + x;
 
-        // Check if in water and far enough from land
+        // Check if in water and far enough from land (O(1) lookup)
         if (landMask[idx] === 0) {
-          const distToLand = this.distanceToLand(x, y, landMask);
+          const distToLand = distMap[idx] ?? 0;
           if (
             distToLand >= islands.mainlandDistance.min &&
             distToLand <= islands.mainlandDistance.max
@@ -591,30 +608,48 @@ export class LandmassGenerator {
   }
 
   /**
-   * Calculate distance to nearest land
+   * Build a distance-to-land map via multi-source BFS.
+   * Each cell stores the Chebyshev distance to the nearest land pixel.
+   * Runs in O(width × height) — far faster than per-query ring search.
    */
-  private distanceToLand(x: number, y: number, landMask: Uint8Array): number {
+  private buildDistanceMap(landMask: Uint8Array): Uint16Array {
     const { width, height } = this.config;
-    const maxDist = Math.max(width, height);
+    const size = width * height;
+    const dist = new Uint16Array(size);
+    dist.fill(0xFFFF); // sentinel = not yet visited
 
-    for (let r = 1; r < maxDist; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+    // Seed BFS from all land pixels
+    const queue: number[] = [];
+    for (let i = 0; i < size; i++) {
+      if (landMask[i] === 1) {
+        dist[i] = 0;
+        queue.push(i);
+      }
+    }
 
+    let head = 0;
+    while (head < queue.length) {
+      const idx = queue[head++]!;
+      const x = idx % width;
+      const y = (idx - x) / width;
+      const d = dist[idx]! + 1;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
           const nx = x + dx;
           const ny = y + dy;
-
           if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-
-          if (landMask[ny * width + nx] === 1) {
-            return r;
+          const ni = ny * width + nx;
+          if (d < dist[ni]!) {
+            dist[ni] = d;
+            queue.push(ni);
           }
         }
       }
     }
 
-    return maxDist;
+    return dist;
   }
 
   /**
@@ -682,7 +717,7 @@ export class LandmassGenerator {
       { dx: 1, dy: -1 },
     ];
 
-    const maxPoints = 10000;
+    const maxPoints = 50000;
 
     while (points.length < maxPoints) {
       const idx = y * width + x;
@@ -750,14 +785,12 @@ export class LandmassGenerator {
     const { width, height } = this.config;
     const visited = new Uint8Array(width * height);
     let count = 0;
-    const minSize = 1000; // Minimum pixels to count as continent
-
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = y * width + x;
         if (landMask[idx] === 1 && visited[idx] === 0) {
           const size = this.floodFill(x, y, landMask, visited);
-          if (size >= minSize) {
+          if (size >= MIN_CONTINENT_PIXELS) {
             count++;
           }
         }

@@ -83,18 +83,45 @@ export class TextTool extends BaseTool {
 
     ctx.activeLayer?.addContent(this.currentText);
 
-    // Create hidden input for text entry
+    // Create visible input for text entry
     this.inputElement = document.createElement('input');
     this.inputElement.type = 'text';
-    this.inputElement.style.position = 'absolute';
-    this.inputElement.style.opacity = '0';
-    this.inputElement.style.pointerEvents = 'none';
+    this.inputElement.style.position = 'fixed';
+    this.inputElement.style.left = '50%';
+    this.inputElement.style.top = '10px';
+    this.inputElement.style.transform = 'translateX(-50%)';
+    this.inputElement.style.zIndex = '10000';
+    this.inputElement.style.padding = '8px';
+    this.inputElement.style.border = '2px solid #00aaff';
+    this.inputElement.style.borderRadius = '4px';
+    this.inputElement.style.backgroundColor = '#1a1a2e';
+    this.inputElement.style.color = '#ffffff';
+    this.inputElement.style.fontSize = '16px';
+    this.inputElement.style.outline = 'none';
+    this.inputElement.placeholder = 'Type text (Enter to finish, Esc to cancel)';
     document.body.appendChild(this.inputElement);
-    this.inputElement.focus();
+
+    // Focus after a small delay to ensure it's rendered
+    setTimeout(() => {
+      this.inputElement?.focus();
+    }, 10);
 
     this.inputElement.addEventListener('input', () => {
       if (this.currentText && this.inputElement) {
         this.currentText.text = this.inputElement.value || '|';
+      }
+    });
+
+    // Handle keyboard events directly on the input element
+    this.inputElement.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelEditing();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        this.finishEditing(ctx);
       }
     });
   }

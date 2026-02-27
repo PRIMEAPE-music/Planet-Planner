@@ -5,7 +5,14 @@
       "Bash(npm install:*)",
       "Bash(npm run build:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: Planet Planner Phase 1 & 2\n\nPhase 1 - Project Foundation & Canvas Core:\n- Vite + React + TypeScript setup\n- Pixi.js canvas engine with pan/zoom\n- Camera system with smooth animations\n- Grid rendering (square/hex) with subdivisions\n- Input handling (mouse/touch)\n- Zustand state management\n- Type definitions for all systems\n- Utility functions (math, color)\n\nPhase 2 - Layer System & Rendering Pipeline:\n- Layer management with Pixi.js integration\n- Procedural parchment texture generation\n- Perlin noise implementation\n- Render pipeline with blend modes\n- Viewport culling for performance\n- Layer Panel UI with CRUD operations\n- Toolbar with zoom and grid controls\n- Status bar with viewport info\n- Export to PNG/JPEG functionality\n\nFeatures:\n- Pan with middle mouse or Shift+drag\n- Zoom with scroll wheel\n- Toggle grid visibility\n- Add/remove layers\n- Layer visibility and lock controls\n- Parchment overlay effect\n- Responsive layout\n\n🤖 Generated with Claude Code (https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git branch:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(cd:*)",
+      "Bash(cat:*)",
+      "Bash(npm run dev:*)"
     ],
     "deny": [],
     "ask": []

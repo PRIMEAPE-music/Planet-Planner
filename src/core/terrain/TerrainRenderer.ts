@@ -4,12 +4,12 @@ import { biomeRegistry, BiomeRegistry } from './BiomeRegistry';
 import { fbm, initNoise } from '../rendering/noise';
 import type {
   BiomeType,
-  BiomeDefinition,
   TerrainMapConfig,
   TerrainStyleSettings,
   TerrainCell,
 } from './types';
-import { hexToRgb } from '@/utils';
+import type { GenerationResult } from '@/core/generation/types';
+import { hexToRgb, debug } from '@/utils';
 import { DEFAULT_CANVAS_DIMENSIONS } from '@/constants';
 
 /**
@@ -36,6 +36,7 @@ export class TerrainRenderer {
 
   // Render targets
   private terrainSprite: Sprite | null = null;
+  private terrainCanvas: HTMLCanvasElement | null = null;
   private debugGraphics: Graphics | null = null;
 
   // Cached terrain data
@@ -83,31 +84,116 @@ export class TerrainRenderer {
     const useSeed = seed ?? this.config.seed;
     this.config.seed = useSeed;
 
-    console.log('[TerrainRenderer] Starting generation with seed:', useSeed);
-    console.log('[TerrainRenderer] Config:', this.config);
+    debug.log('[TerrainRenderer] Starting generation with seed:', useSeed);
+    debug.log('[TerrainRenderer] Config:', this.config);
 
     initNoise(useSeed);
 
     // Generate elevation
-    console.log('[TerrainRenderer] Generating elevation map...');
+    debug.log('[TerrainRenderer] Generating elevation map...');
     this.elevationMap.generate(this.config.width, this.config.height, useSeed);
 
     // Generate moisture map
-    console.log('[TerrainRenderer] Generating moisture map...');
+    debug.log('[TerrainRenderer] Generating moisture map...');
     this.generateMoistureMap(useSeed + 1000);
 
     // Generate temperature map
-    console.log('[TerrainRenderer] Generating temperature map...');
+    debug.log('[TerrainRenderer] Generating temperature map...');
     this.generateTemperatureMap(useSeed + 2000);
 
     // Assign biomes to cells
-    console.log('[TerrainRenderer] Assigning biomes...');
+    debug.log('[TerrainRenderer] Assigning biomes...');
     this.assignBiomes();
 
     // Render terrain
-    console.log('[TerrainRenderer] Rendering terrain...');
+    debug.log('[TerrainRenderer] Rendering terrain...');
     await this.render();
-    console.log('[TerrainRenderer] Generation complete!');
+    debug.log('[TerrainRenderer] Generation complete!');
+  }
+
+  /**
+   * Generate terrain from a LandmassGenerator result.
+   * Uses the result's heightmap and landMask instead of generating new elevation.
+   */
+  async generateFromResult(
+    result: GenerationResult,
+    width: number,
+    height: number,
+    seaLevel?: number
+  ): Promise<void> {
+    // Update config to match the generation result dimensions
+    this.config.width = width;
+    this.config.height = height;
+    if (seaLevel !== undefined) {
+      this.config.seaLevel = seaLevel;
+    }
+
+    const seed = result.metadata.seed;
+    this.config.seed = seed;
+
+    debug.log('[TerrainRenderer] Starting generation from result, seed:', seed);
+    debug.log('[TerrainRenderer] Dimensions:', width, 'x', height);
+
+    initNoise(seed);
+
+    // Load elevation from the generation result heightmap
+    this.elevationMap.setData(result.heightmap, width, height);
+
+    // Generate derived maps from the elevation data
+    this.generateMoistureMap(seed + 1000);
+    this.generateTemperatureMap(seed + 2000);
+
+    // Assign biomes using the land mask from the generation result
+    this.assignBiomesWithLandMask(result.landMask);
+
+    // Render terrain to canvas
+    await this.render();
+    debug.log('[TerrainRenderer] Generation from result complete!');
+  }
+
+  /**
+   * Assign biomes using an explicit land mask (from LandmassGenerator).
+   */
+  private assignBiomesWithLandMask(landMask: Uint8Array): void {
+    const { width, height } = this.config;
+    this.cells = [];
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+
+        const elevation = this.elevationMap.getElevationAt(x, y);
+        const moisture = this.moistureMap?.[idx] ?? 0.5;
+        const temperature = this.temperatureMap?.[idx] ?? 0.5;
+        const isLand = (landMask[idx] ?? 0) === 1;
+
+        let biome: BiomeType;
+        if (!isLand) {
+          // Use elevation to distinguish shallow water from ocean
+          biome = elevation > this.config.seaLevel * 0.8 ? 'shallowWater' : 'ocean';
+        } else {
+          biome = this.registry.determineBiome(
+            elevation,
+            moisture,
+            temperature,
+            this.config.seaLevel
+          );
+        }
+
+        const normal = this.elevationMap.getNormalAt(x, y, 1);
+
+        this.cells.push({
+          position: { x, y },
+          elevation,
+          moisture,
+          temperature,
+          biome,
+          isLand,
+          coastDistance: elevation - this.config.seaLevel,
+          normal,
+        });
+      }
+    }
   }
 
   /**
@@ -217,19 +303,57 @@ export class TerrainRenderer {
     const pixelWidth = width * cellSize;
     const pixelHeight = height * cellSize;
 
-    console.log(`[TerrainRenderer] Rendering ${pixelWidth}x${pixelHeight} pixels...`);
+    debug.log(`[TerrainRenderer] Rendering ${pixelWidth}x${pixelHeight} pixels...`);
     const startTime = performance.now();
 
     // Create canvas for pixel manipulation
     const canvas = document.createElement('canvas');
     canvas.width = pixelWidth;
     canvas.height = pixelHeight;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('[TerrainRenderer] Failed to get 2D canvas context');
+    }
     const imageData = ctx.createImageData(pixelWidth, pixelHeight);
     const data = imageData.data;
 
+    // ── Pre-compute biome color table (avoids per-pixel hexToRgb + getBlendedColor) ──
+    const biomeColorCache = new Map<string, {
+      base: { r: number; g: number; b: number };
+      dark: { r: number; g: number; b: number };
+      light: { r: number; g: number; b: number };
+      shadow: { r: number; g: number; b: number };
+      noiseScale: number;
+      octaves: number;
+      pattern: string;
+      patternDensity: number;
+    }>();
+
+    const uniqueBiomes = new Set(this.cells.map(c => c.biome));
+    for (const biomeId of uniqueBiomes) {
+      const biomeDef = this.registry.get(biomeId);
+      if (!biomeDef) continue;
+      biomeColorCache.set(biomeId, {
+        base: hexToRgb(this.registry.getBlendedColor(biomeDef, 'base', this.style.styleBlend))!,
+        dark: hexToRgb(this.registry.getBlendedColor(biomeDef, 'dark', this.style.styleBlend))!,
+        light: hexToRgb(this.registry.getBlendedColor(biomeDef, 'light', this.style.styleBlend))!,
+        shadow: hexToRgb(this.registry.getBlendedColor(biomeDef, 'shadow', this.style.styleBlend))!,
+        noiseScale: biomeDef.texture.noiseScale,
+        octaves: biomeDef.texture.octaves,
+        pattern: biomeDef.texture.pattern,
+        patternDensity: biomeDef.texture.patternDensity,
+      });
+    }
+
+    // Cache style values to avoid repeated property access in tight loop
+    const showPatterns = this.style.showPatterns;
+    const saturation = this.style.saturation;
+    const brightness = this.style.brightness;
+    const hillshadeIntensity = this.style.hillshadeIntensity;
+    const lightDir = { x: -0.7, y: -0.7 };
+
     // Render each pixel in chunks to allow browser breathing room
-    const CHUNK_SIZE = 10000;
+    const CHUNK_SIZE = 50000;
     let pixelCount = 0;
 
     for (let py = 0; py < pixelHeight; py++) {
@@ -241,90 +365,112 @@ export class TerrainRenderer {
         const cell = this.cells[cellIdx];
         if (!cell) continue;
 
-        const biome = this.registry.get(cell.biome);
-        if (!biome) continue;
+        const colors = biomeColorCache.get(cell.biome);
+        if (!colors) continue;
 
-        // Get base color
-        const baseColor = this.getPixelColor(
-          px,
-          py,
-          cell,
-          biome
-        );
+        // ── Inlined getPixelColor (no function call overhead per pixel) ──
+        const baseColor = colors.base;
+        const noiseVal = fbm(px * colors.noiseScale, py * colors.noiseScale, colors.octaves);
+        const t = (noiseVal + 1) / 2;
+
+        let r: number, g: number, b: number;
+        if (t < 0.5) {
+          const blend = t * 2;
+          r = colors.dark.r + (baseColor.r - colors.dark.r) * blend;
+          g = colors.dark.g + (baseColor.g - colors.dark.g) * blend;
+          b = colors.dark.b + (baseColor.b - colors.dark.b) * blend;
+        } else {
+          const blend = (t - 0.5) * 2;
+          r = baseColor.r + (colors.light.r - baseColor.r) * blend;
+          g = baseColor.g + (colors.light.g - baseColor.g) * blend;
+          b = baseColor.b + (colors.light.b - baseColor.b) * blend;
+        }
+
+        if (showPatterns && colors.pattern !== 'none') {
+          const pattern = this.getPatternValue(px, py, colors.pattern, colors.patternDensity);
+          const s = colors.shadow;
+          r = r * (1 - pattern * 0.3) + s.r * pattern * 0.3;
+          g = g * (1 - pattern * 0.3) + s.g * pattern * 0.3;
+          b = b * (1 - pattern * 0.3) + s.b * pattern * 0.3;
+        }
+
+        if (saturation !== 1) {
+          const gray = r * 0.299 + g * 0.587 + b * 0.114;
+          r = gray + (r - gray) * saturation;
+          g = gray + (g - gray) * saturation;
+          b = gray + (b - gray) * saturation;
+        }
+
+        // Clamp to [0, 255]
+        r = r < 0 ? 0 : r > 255 ? 255 : r;
+        g = g < 0 ? 0 : g > 255 ? 255 : g;
+        b = b < 0 ? 0 : b > 255 ? 255 : b;
 
         // Apply hillshading
         const hillshade = this.elevationMap.getHillshadeAt(
-          px / cellSize,
-          py / cellSize,
-          { x: -0.7, y: -0.7 },
-          this.style.hillshadeIntensity
+          px / cellSize, py / cellSize, lightDir, hillshadeIntensity
         );
 
-        // Apply color adjustments
+        // Write pixel
         const pixelIdx = (py * pixelWidth + px) * 4;
-        data[pixelIdx] = Math.round(baseColor.r * hillshade * this.style.brightness);
-        data[pixelIdx + 1] = Math.round(baseColor.g * hillshade * this.style.brightness);
-        data[pixelIdx + 2] = Math.round(baseColor.b * hillshade * this.style.brightness);
+        data[pixelIdx]     = (r * hillshade * brightness + 0.5) | 0;
+        data[pixelIdx + 1] = (g * hillshade * brightness + 0.5) | 0;
+        data[pixelIdx + 2] = (b * hillshade * brightness + 0.5) | 0;
         data[pixelIdx + 3] = 255;
 
         pixelCount++;
-        // Yield to browser every CHUNK_SIZE pixels
         if (pixelCount % CHUNK_SIZE === 0) {
           await new Promise(resolve => setTimeout(resolve, 0));
         }
       }
     }
 
-    console.log(`[TerrainRenderer] Pixel rendering took ${(performance.now() - startTime).toFixed(0)}ms`);
+    debug.log(`[TerrainRenderer] Pixel rendering took ${(performance.now() - startTime).toFixed(0)}ms`);
 
     // Draw coastlines
-    console.log('[TerrainRenderer] Drawing coastlines...');
+    debug.log('[TerrainRenderer] Drawing coastlines...');
     this.drawCoastlines(data, pixelWidth, pixelHeight);
 
     ctx.putImageData(imageData, 0, 0);
 
-    console.log('[TerrainRenderer] Creating texture and sprite...');
-    console.log(`[TerrainRenderer] Canvas size: ${canvas.width}x${canvas.height}`);
+    debug.log('[TerrainRenderer] Creating texture and sprite...');
+    debug.log(`[TerrainRenderer] Canvas size: ${canvas.width}x${canvas.height}`);
 
     // Debug: Check if canvas has pixel data
     const testPixel = ctx.getImageData(pixelWidth / 2, pixelHeight / 2, 1, 1).data;
-    console.log(`[TerrainRenderer] Sample pixel at center: rgba(${testPixel[0]}, ${testPixel[1]}, ${testPixel[2]}, ${testPixel[3]})`);
+    debug.log(`[TerrainRenderer] Sample pixel at center: rgba(${testPixel[0]}, ${testPixel[1]}, ${testPixel[2]}, ${testPixel[3]})`);
 
-    // Clean up previous sprite
+    // Clean up previous sprite, texture, and canvas
     if (this.terrainSprite) {
-      console.log('[TerrainRenderer] Destroying previous sprite');
+      debug.log('[TerrainRenderer] Destroying previous sprite');
       this.container.removeChild(this.terrainSprite);
-      this.terrainSprite.destroy({ texture: true });
+      this.terrainSprite.destroy({ texture: true, textureSource: true });
       this.terrainSprite = null;
     }
+    if (this.terrainCanvas) {
+      this.terrainCanvas.width = 0;
+      this.terrainCanvas.height = 0;
+      this.terrainCanvas = null;
+    }
+
+    // Store canvas reference for cleanup on next render
+    this.terrainCanvas = canvas;
 
     try {
-      // First, add a debug graphics object to verify rendering works
-      if (this.debugGraphics) {
-        this.container.removeChild(this.debugGraphics);
-        this.debugGraphics.destroy();
-      }
-      this.debugGraphics = new Graphics();
-      // Draw a bright red border around where terrain should be
-      this.debugGraphics.rect(0, 0, DEFAULT_CANVAS_DIMENSIONS.width, DEFAULT_CANVAS_DIMENSIONS.height);
-      this.debugGraphics.stroke({ color: 0xff0000, width: 20 });
-      // Draw corner markers
-      this.debugGraphics.circle(100, 100, 50);
-      this.debugGraphics.fill({ color: 0x00ff00 });
-      this.debugGraphics.circle(DEFAULT_CANVAS_DIMENSIONS.width - 100, 100, 50);
-      this.debugGraphics.fill({ color: 0x0000ff });
-      console.log('[TerrainRenderer] Debug graphics created');
+      // Create texture directly from canvas (simpler and more reliable for Pixi v8)
+      const texture = Texture.from(canvas);
 
-      // Create texture using ImageBitmap for better WebGL compatibility
-      const imageBitmap = await createImageBitmap(canvas);
-      const texture = Texture.from(imageBitmap);
+      // Force texture update to ensure it's uploaded to GPU
+      texture.source.update();
 
-      console.log('[TerrainRenderer] Texture created:', {
+      debug.log('[TerrainRenderer] Texture created:', {
         width: texture.width,
         height: texture.height,
-        valid: texture.source?.valid,
         sourceWidth: texture.source?.width,
         sourceHeight: texture.source?.height,
+        pixelWidth: texture.source?.pixelWidth,
+        pixelHeight: texture.source?.pixelHeight,
+        resource: texture.source?.resource?.constructor.name,
       });
 
       this.terrainSprite = new Sprite(texture);
@@ -332,42 +478,24 @@ export class TerrainRenderer {
       this.terrainSprite.y = 0;
       this.terrainSprite.alpha = 1;
       this.terrainSprite.visible = true;
+      this.terrainSprite.eventMode = 'none'; // Don't block pointer events
+      this.terrainSprite.zIndex = 1;
 
       // Scale sprite to fill canvas dimensions
       const scaleX = DEFAULT_CANVAS_DIMENSIONS.width / pixelWidth;
       const scaleY = DEFAULT_CANVAS_DIMENSIONS.height / pixelHeight;
       this.terrainSprite.scale.set(scaleX, scaleY);
-      console.log(`[TerrainRenderer] Sprite scaled by ${scaleX}x${scaleY} to fill ${DEFAULT_CANVAS_DIMENSIONS.width}x${DEFAULT_CANVAS_DIMENSIONS.height}`);
+      debug.log(`[TerrainRenderer] Sprite scaled by ${scaleX}x${scaleY} to fill ${DEFAULT_CANVAS_DIMENSIONS.width}x${DEFAULT_CANVAS_DIMENSIONS.height}`);
 
-      // Log container state before adding
-      console.log(`[TerrainRenderer] Container children before: ${this.container.children.length}`);
-      console.log('[TerrainRenderer] Container children types:',
-        this.container.children.map((c, i) => `${i}: ${c.constructor.name}`).join(', ')
-      );
-
-      // Insert terrain sprite at index 1 (after background, before grid)
-      // This ensures it's visible but below the grid overlay
-      if (this.container.children.length > 1) {
-        this.container.addChildAt(this.terrainSprite, 1);
-        console.log('[TerrainRenderer] Added terrain sprite at index 1');
-      } else {
-        this.container.addChild(this.terrainSprite);
-        console.log('[TerrainRenderer] Added terrain sprite at end');
-      }
-
-      // Add debug graphics on top
-      this.container.addChild(this.debugGraphics);
-      console.log('[TerrainRenderer] Added debug graphics on top');
-
-      // Log container state after adding
-      console.log(`[TerrainRenderer] Container children after: ${this.container.children.length}`);
-      console.log('[TerrainRenderer] Container children types after:',
-        this.container.children.map((c, i) => `${i}: ${c.constructor.name}`).join(', ')
-      );
-      console.log(`[TerrainRenderer] Container position:`, { x: this.container.x, y: this.container.y });
-      console.log(`[TerrainRenderer] Container visible:`, this.container.visible);
-      console.log(`[TerrainRenderer] Container parent:`, this.container.parent?.constructor.name);
-      console.log(`[TerrainRenderer] Sprite bounds:`, {
+      // Add terrain sprite to container (layer's content container)
+      this.container.addChild(this.terrainSprite);
+      debug.log('[TerrainRenderer] Added terrain sprite to layer container');
+      debug.log(`[TerrainRenderer] Container position:`, { x: this.container.x, y: this.container.y });
+      debug.log(`[TerrainRenderer] Container visible:`, this.container.visible);
+      debug.log(`[TerrainRenderer] Container parent:`, this.container.parent?.constructor.name);
+      debug.log(`[TerrainRenderer] Container children count:`, this.container.children.length);
+      debug.log(`[TerrainRenderer] Container sortableChildren:`, this.container.sortableChildren);
+      debug.log(`[TerrainRenderer] Sprite bounds:`, {
         x: this.terrainSprite.x,
         y: this.terrainSprite.y,
         width: this.terrainSprite.width,
@@ -376,92 +504,20 @@ export class TerrainRenderer {
         scaleY: this.terrainSprite.scale.y,
         visible: this.terrainSprite.visible,
         alpha: this.terrainSprite.alpha,
+        zIndex: this.terrainSprite.zIndex,
+        tint: this.terrainSprite.tint,
         parent: this.terrainSprite.parent?.constructor.name,
       });
-      console.log(`[TerrainRenderer] Total render time: ${(performance.now() - startTime).toFixed(0)}ms`);
+      debug.log(`[TerrainRenderer] Texture info after sprite creation:`, {
+        width: this.terrainSprite.texture.width,
+        height: this.terrainSprite.texture.height,
+        uploaded: (this.terrainSprite.texture.source as any)?._touched,
+      });
+      debug.log(`[TerrainRenderer] Total render time: ${(performance.now() - startTime).toFixed(0)}ms`);
     } catch (err) {
       console.error('[TerrainRenderer] Texture creation error:', err);
       throw err;
     }
-  }
-
-  /**
-   * Get pixel color with biome blending and patterns
-   */
-  private getPixelColor(
-    px: number,
-    py: number,
-    _cell: TerrainCell,
-    biome: BiomeDefinition
-  ): { r: number; g: number; b: number } {
-    // Get blended base color
-    const baseColorHex = this.registry.getBlendedColor(
-      biome,
-      'base',
-      this.style.styleBlend
-    );
-    const baseColor = hexToRgb(baseColorHex)!;
-
-    // Add noise variation
-    const noiseVal = fbm(
-      px * biome.texture.noiseScale,
-      py * biome.texture.noiseScale,
-      biome.texture.octaves
-    );
-
-    // Get variation colors
-    const darkColorHex = this.registry.getBlendedColor(biome, 'dark', this.style.styleBlend);
-    const lightColorHex = this.registry.getBlendedColor(biome, 'light', this.style.styleBlend);
-    const darkColor = hexToRgb(darkColorHex)!;
-    const lightColor = hexToRgb(lightColorHex)!;
-
-    // Blend based on noise
-    const t = (noiseVal + 1) / 2; // 0-1
-    let r, g, b;
-
-    if (t < 0.5) {
-      const blend = t * 2;
-      r = darkColor.r + (baseColor.r - darkColor.r) * blend;
-      g = darkColor.g + (baseColor.g - darkColor.g) * blend;
-      b = darkColor.b + (baseColor.b - darkColor.b) * blend;
-    } else {
-      const blend = (t - 0.5) * 2;
-      r = baseColor.r + (lightColor.r - baseColor.r) * blend;
-      g = baseColor.g + (lightColor.g - baseColor.g) * blend;
-      b = baseColor.b + (lightColor.b - baseColor.b) * blend;
-    }
-
-    // Add pattern overlay if enabled
-    if (this.style.showPatterns && biome.texture.pattern !== 'none') {
-      const pattern = this.getPatternValue(
-        px,
-        py,
-        biome.texture.pattern,
-        biome.texture.patternDensity
-      );
-
-      const shadowColor = hexToRgb(
-        this.registry.getBlendedColor(biome, 'shadow', this.style.styleBlend)
-      )!;
-
-      r = r * (1 - pattern * 0.3) + shadowColor.r * pattern * 0.3;
-      g = g * (1 - pattern * 0.3) + shadowColor.g * pattern * 0.3;
-      b = b * (1 - pattern * 0.3) + shadowColor.b * pattern * 0.3;
-    }
-
-    // Apply saturation
-    if (this.style.saturation !== 1) {
-      const gray = r * 0.299 + g * 0.587 + b * 0.114;
-      r = gray + (r - gray) * this.style.saturation;
-      g = gray + (g - gray) * this.style.saturation;
-      b = gray + (b - gray) * this.style.saturation;
-    }
-
-    return {
-      r: Math.max(0, Math.min(255, r)),
-      g: Math.max(0, Math.min(255, g)),
-      b: Math.max(0, Math.min(255, b)),
-    };
   }
 
   /**
@@ -485,7 +541,7 @@ export class TerrainRenderer {
         // Diagonal lines
         const line1 = ((x + y) % 8) < 1 ? 1 : 0;
         const line2 = ((x - y + 1000) % 8) < 1 ? 1 : 0;
-        return (line1 + line2) * density;
+        return Math.min(1, (line1 + line2) * density);
       }
 
       case 'waves': {
@@ -714,8 +770,17 @@ export class TerrainRenderer {
    * Destroy renderer
    */
   destroy(): void {
-    this.terrainSprite?.destroy();
+    if (this.terrainSprite) {
+      this.terrainSprite.destroy({ texture: true, textureSource: true });
+      this.terrainSprite = null;
+    }
+    if (this.terrainCanvas) {
+      this.terrainCanvas.width = 0;
+      this.terrainCanvas.height = 0;
+      this.terrainCanvas = null;
+    }
     this.debugGraphics?.destroy();
+    this.debugGraphics = null;
     this.cells = [];
     this.moistureMap = null;
     this.temperatureMap = null;
