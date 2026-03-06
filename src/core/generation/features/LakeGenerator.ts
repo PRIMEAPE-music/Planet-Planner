@@ -242,15 +242,16 @@ export class LakeGenerator {
 
     // Flood fill to create lake shape
     const lakePixels: number[] = [];
+    const lakePixelSet = new Set<number>(); // O(1) lookups instead of includes()
     const visited = new Set<number>();
     const queue: number[] = [depression.centerIdx];
+    let queueHead = 0;
 
     // Lake surface elevation slightly above depression bottom
     const surfaceElevation = baseElevation + 0.02;
 
-    while (queue.length > 0 && lakePixels.length < maxSize) {
-      const idx = queue.shift();
-      if (idx === undefined) continue;
+    while (queueHead < queue.length && lakePixels.length < maxSize) {
+      const idx = queue[queueHead++]!;
       if (visited.has(idx)) continue;
       visited.add(idx);
 
@@ -264,6 +265,7 @@ export class LakeGenerator {
       if (usedArea.has(idx)) continue;
 
       lakePixels.push(idx);
+      lakePixelSet.add(idx);
 
       // Add neighbors to queue
       for (let dy = -1; dy <= 1; dy++) {
@@ -299,7 +301,7 @@ export class LakeGenerator {
         for (let dx = -1; dx <= 1 && !isBoundary; dx++) {
           if (dx === 0 && dy === 0) continue;
           const ni = (y + dy) * width + (x + dx);
-          if (ni >= 0 && ni < landMask.length && !lakePixels.includes(ni)) {
+          if (ni >= 0 && ni < landMask.length && !lakePixelSet.has(ni)) {
             isBoundary = true;
           }
         }
@@ -316,16 +318,13 @@ export class LakeGenerator {
 
     for (const river of rivers) {
       // Check if river touches lake
-      for (const point of river.path) {
+      for (let pathIdx = 0; pathIdx < river.path.length; pathIdx++) {
+        const point = river.path[pathIdx]!;
         const idx = Math.floor(point.y) * width + Math.floor(point.x);
-        if (lakePixels.includes(idx) || this.isAdjacent(idx, lakePixels)) {
-          // Check if this is inflow or outflow based on position in river
-          const pathIdx = river.path.indexOf(point);
+        if (lakePixelSet.has(idx) || this.isAdjacent(idx, lakePixelSet)) {
           if (pathIdx < river.path.length / 2) {
-            // Near source = outflow
             outflow = river.id;
           } else {
-            // Near mouth = inflow
             inflows.push(river.id);
           }
           break;
@@ -358,7 +357,7 @@ export class LakeGenerator {
   /**
    * Check if index is adjacent to any in list
    */
-  private isAdjacent(idx: number, list: number[]): boolean {
+  private isAdjacent(idx: number, pixelSet: Set<number>): boolean {
     const { width } = this;
     const x = idx % width;
     const y = Math.floor(idx / width);
@@ -367,7 +366,7 @@ export class LakeGenerator {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const ni = (y + dy) * width + (x + dx);
-        if (list.includes(ni)) return true;
+        if (pixelSet.has(ni)) return true;
       }
     }
 

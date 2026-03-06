@@ -119,7 +119,10 @@ export class ClimateGenerator {
   private calculateOceanDistance(landMask: Uint8Array): Float32Array {
     const { width, height } = this;
     const distance = new Float32Array(width * height).fill(Infinity);
-    const queue: { x: number; y: number; dist: number }[] = [];
+    // Index-based queue for O(1) dequeue instead of O(n) shift()
+    const queue: number[] = [];
+    const distQueue: number[] = [];
+    let head = 0;
 
     // Initialize with all ocean cells
     for (let y = 0; y < height; y++) {
@@ -127,34 +130,36 @@ export class ClimateGenerator {
         const idx = y * width + x;
         if (landMask[idx] === 0) {
           distance[idx] = 0;
-          queue.push({ x, y, dist: 0 });
+          queue.push(idx);
+          distQueue.push(0);
         }
       }
     }
 
     // BFS to calculate distances
-    const directions = [
-      { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
-      { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
-    ];
+    const dxArr = [-1, 1, 0, 0];
+    const dyArr = [0, 0, -1, 1];
 
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (!item) continue;
-      const { x, y, dist } = item;
+    while (head < queue.length) {
+      const flatIdx = queue[head]!;
+      const dist = distQueue[head]!;
+      head++;
 
-      for (const { dx, dy } of directions) {
-        const nx = x + dx;
-        const ny = y + dy;
+      const x = flatIdx % width;
+      const y = (flatIdx - x) / width;
+
+      for (let d = 0; d < 4; d++) {
+        const nx = x + dxArr[d]!;
+        const ny = y + dyArr[d]!;
         if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
 
         const ni = ny * width + nx;
         const newDist = dist + 1;
-        const currentDist = distance[ni] ?? Infinity;
 
-        if (newDist < currentDist) {
+        if (newDist < distance[ni]!) {
           distance[ni] = newDist;
-          queue.push({ x: nx, y: ny, dist: newDist });
+          queue.push(ni);
+          distQueue.push(newDist);
         }
       }
     }

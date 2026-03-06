@@ -12,7 +12,9 @@ import {
   applyPreset,
   parseSeed,
 } from '@/core/generation/presets';
-import { LandmassGenerator } from '@/core/generation/LandmassGenerator';
+import { createWorkerTask } from '@/workers/createWorkerTask';
+import type { CancellablePromise } from '@/workers/createWorkerTask';
+import type { LandmassWorkerInput } from '@/workers/landmass.worker';
 
 interface GenerationState {
   // Configuration
@@ -75,8 +77,20 @@ const initialState: GenerationState = {
   historyIndex: -1,
 };
 
-let currentGenerator: LandmassGenerator | null = null;
-let abortController: AbortController | null = null;
+let currentWorker: Worker | null = null;
+let currentTask: CancellablePromise<GenerationResult> | null = null;
+
+/**
+ * Create a new landmass worker instance.
+ * Vite handles the bundling + path alias resolution automatically
+ * when using the `new URL(..., import.meta.url)` pattern.
+ */
+function createLandmassWorker(): Worker {
+  return new Worker(
+    new URL('../workers/landmass.worker.ts', import.meta.url),
+    { type: 'module' },
+  );
+}
 
 export const useGenerationStore = create<GenerationStore>()(
   immer((set, get) => ({
@@ -153,11 +167,15 @@ export const useGenerationStore = create<GenerationStore>()(
       const state = get();
       if (state.isGenerating) return;
 
-      // Cancel any existing generation
-      if (abortController) {
-        abortController.abort();
+      // Cancel any existing worker/task
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
       }
-      abortController = new AbortController();
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+      }
 
       set((s) => {
         s.isGenerating = true;
@@ -166,18 +184,27 @@ export const useGenerationStore = create<GenerationStore>()(
       });
 
       try {
-        currentGenerator = new LandmassGenerator(state.config, (progress) => {
-          set((s) => {
-            s.progress = progress;
-          });
-        });
+        currentWorker = createLandmassWorker();
 
-        const result = await currentGenerator.generate();
+        const input: LandmassWorkerInput = {
+          config: state.config,
+        };
 
-        // Check if aborted
-        if (abortController?.signal.aborted) {
-          return;
-        }
+        currentTask = createWorkerTask<LandmassWorkerInput, GenerationResult>(
+          currentWorker,
+          input,
+          (progress, stage) => {
+            set((s) => {
+              s.progress = {
+                progress,
+                stage: stage as GenerationProgress['stage'],
+                message: stage,
+              };
+            });
+          },
+        );
+
+        const result = await currentTask;
 
         set((s) => {
           // Add previous result to history
@@ -191,7 +218,8 @@ export const useGenerationStore = create<GenerationStore>()(
           s.progress = null;
         });
       } catch (error) {
-        if (abortController?.signal.aborted) {
+        // Ignore cancellation errors
+        if (error instanceof Error && error.message === 'Worker task cancelled') {
           return;
         }
 
@@ -200,15 +228,25 @@ export const useGenerationStore = create<GenerationStore>()(
           s.isGenerating = false;
           s.progress = null;
         });
+      } finally {
+        // Clean up worker after completion
+        if (currentWorker) {
+          currentWorker.terminate();
+          currentWorker = null;
+        }
+        currentTask = null;
       }
     },
 
     cancelGeneration: () => {
-      if (abortController) {
-        abortController.abort();
-        abortController = null;
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
       }
-      currentGenerator = null;
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+      }
 
       set((s) => {
         s.isGenerating = false;
@@ -236,12 +274,21 @@ export const useGenerationStore = create<GenerationStore>()(
         quality: 'draft',
       };
 
-      const generator = new LandmassGenerator(previewConfig);
-      const result = await generator.generate();
+      const worker = createLandmassWorker();
 
-      set((s) => {
-        s.previewResult = result;
-      });
+      try {
+        const input: LandmassWorkerInput = { config: previewConfig };
+        const result = await createWorkerTask<LandmassWorkerInput, GenerationResult>(
+          worker,
+          input,
+        );
+
+        set((s) => {
+          s.previewResult = result;
+        });
+      } finally {
+        worker.terminate();
+      }
     },
 
     undo: () => {
@@ -263,8 +310,13 @@ export const useGenerationStore = create<GenerationStore>()(
     },
 
     reset: () => {
-      if (abortController) {
-        abortController.abort();
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
+      }
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
       }
       set({
         ...initialState,

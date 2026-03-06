@@ -322,6 +322,8 @@ export class ForestGenerator {
     const visited = new Uint8Array(width * height);
     const regions: ForestRegion[] = [];
     const minRegionSize = 50;
+    // Shared scratch buffer — reused across regions to avoid per-region full-map allocations
+    const sharedDensityBuf = new Float32Array(width * height);
 
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -332,14 +334,14 @@ export class ForestGenerator {
         const startDensity = densityMap[idx] ?? 0;
         if (startDensity < 0.5) continue;
 
-        // Flood fill to find region
+        // Flood fill with index-based queue (O(1) dequeue)
         const regionPixels: number[] = [];
         const queue: number[] = [idx];
+        let queueHead = 0;
         const boundary: Vector2[] = [];
 
-        while (queue.length > 0) {
-          const current = queue.shift();
-          if (current === undefined) continue;
+        while (queueHead < queue.length) {
+          const current = queue[queueHead++]!;
           if (visited[current]) continue;
           if (landMask[current] !== 1) continue;
 
@@ -410,10 +412,14 @@ export class ForestGenerator {
         }
         const avgDensity = densitySum / regionPixels.length;
 
-        // Create region density map
-        const regionDensityMap = new Float32Array(width * height);
+        // Write region pixels into shared buffer, then copy to final
         for (const pixel of regionPixels) {
-          regionDensityMap[pixel] = densityMap[pixel] ?? 0;
+          sharedDensityBuf[pixel] = densityMap[pixel] ?? 0;
+        }
+        const regionDensityMap = new Float32Array(sharedDensityBuf);
+        // Zero out only written pixels (O(regionSize) instead of O(width*height))
+        for (const pixel of regionPixels) {
+          sharedDensityBuf[pixel] = 0;
         }
 
         regions.push({

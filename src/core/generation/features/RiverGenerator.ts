@@ -175,55 +175,43 @@ export class RiverGenerator {
    * Calculate flow accumulation using recursive upstream traversal
    */
   private calculateFlowAccumulation(landMask: Uint8Array): void {
-    const { width, height } = this;
+    const size = this.width * this.height;
 
     // Initialize all land cells with base flow of 1
-    for (let i = 0; i < landMask.length; i++) {
+    for (let i = 0; i < size; i++) {
       this.flowAccumulation[i] = landMask[i] === 1 ? 1 : 0;
     }
 
-    // Build upstream connections
-    const upstream: number[][] = Array(width * height)
-      .fill(null)
-      .map(() => []);
-
-    for (let i = 0; i < this.flowDirection.length; i++) {
-      const target = this.flowDirection[i];
-      if (target !== undefined && target >= 0 && target < upstream.length) {
-        const upstreamArray = upstream[target];
-        if (upstreamArray) {
-          upstreamArray.push(i);
-        }
+    // Topological-sort BFS using flat typed arrays (no per-pixel array allocations)
+    // Count in-degree: how many cells flow into each cell
+    const inDegree = new Uint16Array(size);
+    for (let i = 0; i < size; i++) {
+      const target = this.flowDirection[i]!;
+      if (target >= 0 && target < size && landMask[i] === 1) {
+        inDegree[target] = inDegree[target]! + 1;
       }
     }
 
-    // Process cells in order (by elevation, highest first)
-    const sortedCells = Array.from({ length: width * height }, (_, i) => i)
-      .filter((i) => landMask[i] === 1)
-      .sort((a, b) => (this.flowAccumulation[b] ?? 0) - (this.flowAccumulation[a] ?? 0));
-
-    // Accumulate flow downstream
-    const visited = new Uint8Array(width * height);
-
-    const accumulate = (idx: number): number => {
-      if (visited[idx]) return this.flowAccumulation[idx] ?? 0;
-      visited[idx] = 1;
-
-      let total = 1; // Self
-      const upstreamList = upstream[idx];
-      if (upstreamList) {
-        for (const upIdx of upstreamList) {
-          total += accumulate(upIdx);
-        }
+    // Seed queue with source cells (in-degree 0, land only)
+    const queue: number[] = [];
+    let queueHead = 0;
+    for (let i = 0; i < size; i++) {
+      if (landMask[i] === 1 && inDegree[i] === 0) {
+        queue.push(i);
       }
+    }
 
-      this.flowAccumulation[idx] = total;
-      return total;
-    };
+    // Process in topological order: propagate flow downstream
+    while (queueHead < queue.length) {
+      const idx = queue[queueHead++]!;
+      const target = this.flowDirection[idx]!;
 
-    for (const idx of sortedCells) {
-      if (!visited[idx]) {
-        accumulate(idx);
+      if (target >= 0 && target < size) {
+        this.flowAccumulation[target] = this.flowAccumulation[target]! + this.flowAccumulation[idx]!;
+        inDegree[target] = inDegree[target]! - 1;
+        if (inDegree[target]! === 0) {
+          queue.push(target);
+        }
       }
     }
   }

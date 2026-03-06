@@ -6,9 +6,11 @@ import type {
   FeatureGenerationProgress,
 } from '@/core/generation/features/types';
 import {
-  FeatureGenerator,
   DEFAULT_FEATURE_CONFIG,
 } from '@/core/generation/features/FeatureGenerator';
+import { createWorkerTask } from '@/workers/createWorkerTask';
+import type { CancellablePromise } from '@/workers/createWorkerTask';
+import type { FeatureWorkerInput } from '@/workers/feature.worker';
 
 interface FeatureState {
   // Configuration
@@ -42,6 +44,8 @@ interface FeatureActions {
     plateMap?: Uint8Array
   ) => Promise<FeatureGenerationResult | null>;
 
+  cancelGeneration: () => void;
+
   setVisibility: (feature: keyof Pick<FeatureState, 'showMountains' | 'showRivers' | 'showLakes' | 'showForests' | 'showClimate'>, visible: boolean) => void;
   reset: () => void;
 }
@@ -60,6 +64,21 @@ const initialState: FeatureState = {
   showForests: true,
   showClimate: false,
 };
+
+let currentWorker: Worker | null = null;
+let currentTask: CancellablePromise<FeatureGenerationResult> | null = null;
+
+/**
+ * Create a new feature worker instance.
+ * Vite handles the bundling + path alias resolution automatically
+ * when using the `new URL(..., import.meta.url)` pattern.
+ */
+function createFeatureWorker(): Worker {
+  return new Worker(
+    new URL('../workers/feature.worker.ts', import.meta.url),
+    { type: 'module' },
+  );
+}
 
 export const useFeatureStore = create<FeatureStore>()(
   immer((set, get) => ({
@@ -105,6 +124,16 @@ export const useFeatureStore = create<FeatureStore>()(
       const state = get();
       if (state.isGenerating) return null;
 
+      // Cancel any existing worker/task
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
+      }
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+      }
+
       set((s) => {
         s.isGenerating = true;
         s.progress = null;
@@ -115,22 +144,32 @@ export const useFeatureStore = create<FeatureStore>()(
         const width = Math.sqrt(landMask.length);
         const height = width;
 
-        const generator = new FeatureGenerator(
-          state.config,
+        currentWorker = createFeatureWorker();
+
+        const input: FeatureWorkerInput = {
+          config: state.config,
           width,
           height,
-          (progress) => {
-            set((s) => {
-              s.progress = progress;
-            });
-          }
-        );
-
-        const result = await generator.generate(
           landMask,
           elevationData,
-          plateMap
+          plateMap,
+        };
+
+        currentTask = createWorkerTask<FeatureWorkerInput, FeatureGenerationResult>(
+          currentWorker,
+          input,
+          (progress, stage) => {
+            set((s) => {
+              s.progress = {
+                progress,
+                stage: stage as FeatureGenerationProgress['stage'],
+                message: stage,
+              };
+            });
+          },
         );
+
+        const result = await currentTask;
 
         set((s) => {
           s.result = result;
@@ -140,13 +179,41 @@ export const useFeatureStore = create<FeatureStore>()(
 
         return result;
       } catch (error) {
+        // Ignore cancellation errors
+        if (error instanceof Error && error.message === 'Worker task cancelled') {
+          return null;
+        }
+
         set((s) => {
           s.error = error instanceof Error ? error.message : 'Feature generation failed';
           s.isGenerating = false;
           s.progress = null;
         });
         return null;
+      } finally {
+        // Clean up worker after completion
+        if (currentWorker) {
+          currentWorker.terminate();
+          currentWorker = null;
+        }
+        currentTask = null;
       }
+    },
+
+    cancelGeneration: () => {
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
+      }
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+      }
+
+      set((s) => {
+        s.isGenerating = false;
+        s.progress = null;
+      });
     },
 
     setVisibility: (feature, visible) => {
@@ -156,6 +223,14 @@ export const useFeatureStore = create<FeatureStore>()(
     },
 
     reset: () => {
+      if (currentTask) {
+        currentTask.cancel();
+        currentTask = null;
+      }
+      if (currentWorker) {
+        currentWorker.terminate();
+        currentWorker = null;
+      }
       set(initialState);
     },
   }))

@@ -262,9 +262,44 @@ export class LandmassGenerator {
     const { seaLevel, landRatio } = this.config.continentShape;
     const size = heightmap.length;
 
-    // First pass: find threshold for desired land ratio
-    const sorted = Float32Array.from(heightmap).sort();
-    const targetThreshold = sorted[Math.floor(size * (1 - landRatio))] ?? 0.5;
+    // Histogram-based percentile finding — O(n) instead of O(n log n) sort
+    const bucketCount = 1000;
+    const histogram = new Uint32Array(bucketCount);
+
+    let minVal = Infinity;
+    let maxVal = -Infinity;
+    for (let i = 0; i < size; i++) {
+      const v = heightmap[i]!;
+      if (v < minVal) minVal = v;
+      if (v > maxVal) maxVal = v;
+    }
+
+    const range = maxVal - minVal;
+    if (range <= 0) {
+      for (let i = 0; i < size; i++) {
+        landMask[i] = (heightmap[i] ?? 0) >= seaLevel ? 1 : 0;
+      }
+      return;
+    }
+
+    const scale = (bucketCount - 1) / range;
+    for (let i = 0; i < size; i++) {
+      const bucket = Math.floor((heightmap[i]! - minVal) * scale);
+      histogram[bucket]!++;
+    }
+
+    // Walk histogram to find threshold at (1 - landRatio) percentile
+    const targetCount = Math.floor(size * (1 - landRatio));
+    let cumulative = 0;
+    let thresholdBucket = 0;
+    for (let b = 0; b < bucketCount; b++) {
+      cumulative += histogram[b]!;
+      if (cumulative >= targetCount) {
+        thresholdBucket = b;
+        break;
+      }
+    }
+    const targetThreshold = minVal + thresholdBucket / scale;
 
     // Use the higher of seaLevel or calculated threshold
     const threshold = Math.max(seaLevel, targetThreshold);
